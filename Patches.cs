@@ -7,10 +7,10 @@ using System.Threading.Tasks;
 
 namespace BaseMacro
 {
-    internal class Patches
+    public class Patches
     {
         [HarmonyPatch(typeof(scrController), "PlayerControl_Update")]
-        private static class Patch_PlayerControl_Update
+        public static class Patch_PlayerControl_Update
         {
             private static void Postfix(scrController __instance)
             {
@@ -20,13 +20,13 @@ namespace BaseMacro
         }
 
         [HarmonyPatch(typeof(scrController), nameof(scrController.Awake_Rewind))]
-        private static class Patch_Awake_Rewind
+        public static class Patch_Awake_Rewind
         {
             private static void Postfix() => TimeBasedMacro.Reset();
         }
 
         [HarmonyPatch(typeof(scrController), nameof(scrController.Restart))]
-        private static class Patch_Restart
+        public static class Patch_Restart
         {
             private static void Prefix() => TimeBasedMacro.Reset();
         }
