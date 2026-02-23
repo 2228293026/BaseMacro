@@ -171,11 +171,6 @@ namespace BaseMacro
                         pendingKey = null;
                     }
                 }
-                if(floor.holdLength > -1)
-                {
-                    lastTriggeredFloor = i;
-                    continue;
-                }
                 double triggerTime = triggerTimes[i];
                 double adjustedTrigger = triggerTime + TimeOffset * 0.001;
 
