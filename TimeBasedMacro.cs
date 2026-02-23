@@ -116,7 +116,19 @@ namespace BaseMacro
 
             keyIndex = 0; // 重置索引
         }
-
+        private static double GetHoldEndTime(scrFloor floor, scrConductor conductor)
+        {
+            double spb = 60.0 / conductor.bpm;
+            return floor.entryTime + floor.holdLength * spb;
+        }
+        private static bool NextPendingFloorIsHold()
+        {
+            int nextIndex = lastTriggeredFloor + 1;
+            if (nextIndex < 0 || nextIndex >= (levelMaker?.listFloors.Count ?? 0))
+                return false;
+            var nextFloor = levelMaker?.listFloors[nextIndex];
+            return nextFloor != null && nextFloor.holdLength != -1;
+        }
         public static void Update(scrController controller)
         {
 
@@ -139,9 +151,29 @@ namespace BaseMacro
             for (int i = startFloor; i < triggerTimes!.Count; i++)
             {
                 var floor = levelMaker?.listFloors[i];
-                if (floor != null && floor.midSpin)
+                if (floor == null) continue;
+
+                if (floor.nextfloor != null && floor.nextfloor.auto)
                 {
-                    lastTriggeredFloor = i; // 标记为已处理，但不触发
+                    lastTriggeredFloor = i;
+                    continue;
+                }
+                if (floor.midSpin)
+                {
+                    lastTriggeredFloor = i;
+                    continue;
+                }
+                if (floor.nextfloor != null && floor.nextfloor.auto)
+                {
+                    if (pendingKey.HasValue)
+                    {
+                        keybd_event(pendingKey.Value, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                        pendingKey = null;
+                    }
+                }
+                if(floor.holdLength > -1)
+                {
+                    lastTriggeredFloor = i;
                     continue;
                 }
                 double triggerTime = triggerTimes[i];
