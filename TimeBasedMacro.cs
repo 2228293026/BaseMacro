@@ -171,45 +171,82 @@ namespace BaseMacro
                         pendingKey = null;
                     }
                 }
+                // 判断是否需要只释放按键而不按下新键
+                bool releaseOnly = false;
+
+                // 如果当前地板是长按，且下一个地板不是长按
+                if (Main.Settings.SimulateKeyPress)
+                {
+                    if (floor.holdLength > -1 && i + 1 < triggerTimes.Count)
+                    {
+                        var nextFloor = levelMaker?.listFloors[i + 1];
+                        if (nextFloor != null && nextFloor.holdLength == -1)
+                        {
+                            releaseOnly = true;
+                        }
+                    }
+                }
+
                 double triggerTime = triggerTimes[i];
                 double adjustedTrigger = triggerTime + TimeOffset * 0.001;
 
-                // 如果触发时间在当前帧或下一帧内（允许微小容差）
-                if (adjustedTrigger <= nextFrameTime + 1e-15) // 1飞秒容差
+                if (adjustedTrigger <= nextFrameTime + 1e-15)
                 {
-                    // 避免重复触发（理论上不会）
+
                     if (i <= lastTriggeredFloor) continue;
 
                     UpdateKeyCodes();
 
-                    // 触发点击
-                    if (!Main.Settings.SimulateKeyPress)
-                        controller.Hit(false);
-
-                    // 模拟按键
-                    if (Main.Settings.SimulateKeyPress && keyCodes.Count > 0)
+                    if (releaseOnly)
                     {
-                        if (pendingKey.HasValue)
+                        // 情况1: 只释放按键，不按下新键
+                        if (Main.Settings.SimulateKeyPress && pendingKey.HasValue)
                         {
                             keybd_event(pendingKey.Value, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
                             pendingKey = null;
+                            if (enableLog) Debug.Log($"[TimeBasedMacro] 地板 {i} 释放所有按键（下一个不是长按）");
                         }
 
-                        byte key = keyCodes[keyIndex];
-                        keyIndex = (keyIndex + 1) % keyCodes.Count;
-                        keybd_event(key, 0, KEYEVENTF_KEYDOWN, UIntPtr.Zero);
-                        pendingKey = key;
-                        // 不设置自动释放，由下次触发或重置时释放
+
+                        // 跳过下一个地板（将其标记为已处理）
+                        if (i + 1 > lastTriggeredFloor)
+                        {
+                            lastTriggeredFloor = i + 1;
+                            if (enableLog) Debug.Log($"[TimeBasedMacro] 跳过普通地板 {i + 1}");
+                        }
+                    }
+                    else
+                    {
+                        // 情况2: 正常触发，需要按下新键
+
+                        // 触发点击
+                        if (!Main.Settings.SimulateKeyPress)
+                            controller.Hit(false);
+
+                        // 模拟按键
+                        if (Main.Settings.SimulateKeyPress && keyCodes.Count > 0)
+                        {
+                            if (pendingKey.HasValue)
+                            {
+                                keybd_event(pendingKey.Value, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                                pendingKey = null;
+                            }
+
+                            byte key = keyCodes[keyIndex];
+                            keyIndex = (keyIndex + 1) % keyCodes.Count;
+                            keybd_event(key, 0, KEYEVENTF_KEYDOWN, UIntPtr.Zero);
+                            pendingKey = key;
+                        }
                     }
 
                     lastTriggeredFloor = i;
 
                     if (enableLog)
-                        Debug.Log($"[TimeBasedMacro] 触发地板 {i}，时间 {currentTime:F6}s，理论 {triggerTime:F6}s，偏移 {TimeOffset}ms");
+                        Debug.Log($"[TimeBasedMacro] 触发地板 {i}，时间 {currentTime:F6}s，理论 {triggerTime:F6}s，偏移 {TimeOffset}ms，releaseOnly={releaseOnly}");
                 }
                 else
                 {
-                    // 由于触发时间是递增的，遇到第一个超出下一帧时间的就停止
+
                     break;
                 }
             }
