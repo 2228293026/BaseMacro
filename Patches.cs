@@ -12,7 +12,7 @@ namespace BaseMacro
         [HarmonyPatch(typeof(scrController), "PlayerControl_Update")]
         public static class Patch_PlayerControl_Update
         {
-            private static void Postfix(scrController __instance)
+            public static void Postfix(scrController __instance)
             {
                 TimeBasedMacro.Update(__instance);
                 TimeBasedMacro.HandleInput();
@@ -22,13 +22,13 @@ namespace BaseMacro
         [HarmonyPatch(typeof(scrController), nameof(scrController.Awake_Rewind))]
         public static class Patch_Awake_Rewind
         {
-            private static void Postfix() => TimeBasedMacro.Reset();
+            public static void Postfix() => TimeBasedMacro.Reset();
         }
 
         [HarmonyPatch(typeof(scrController), nameof(scrController.Restart))]
         public static class Patch_Restart
         {
-            private static void Prefix() => TimeBasedMacro.Reset();
+            public static void Prefix() => TimeBasedMacro.Reset();
         }
     }
 }
