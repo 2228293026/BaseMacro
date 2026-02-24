@@ -9,7 +9,7 @@ namespace BaseMacro
         private readonly string _cachedText = "Macro is enabled!";
         private Rect _rect;
 
-        void Awake()
+        public void Awake()
         {
             _rect = new Rect(
                 0,
@@ -20,13 +20,13 @@ namespace BaseMacro
             _showMacroText = Main.Settings.Macro;
         }
 
-        void OnEnable()
+        public void OnEnable()
         {
             // 订阅事件
             Main.Settings?.OnMacroChanged += OnMacroChanged;
         }
 
-        void OnDisable()
+        public void OnDisable()
         {
             // 取消订阅
             Main.Settings?.OnMacroChanged -= OnMacroChanged;
@@ -37,7 +37,7 @@ namespace BaseMacro
             _showMacroText = newValue;
         }
 
-        void OnGUI()
+        public void OnGUI()
         {
             if (_showMacroText)
             {
