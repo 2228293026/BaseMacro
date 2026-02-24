@@ -256,8 +256,7 @@ namespace BaseMacro
 
             var lm = levelMaker;
             var cond = conductor;
-            if (lm == null || cond == null) return;
-            var floors = lm.listFloors;
+            var floors = lm?.listFloors;
 
             if (!initialized || NeedReinitialize())
             {
@@ -277,7 +276,7 @@ namespace BaseMacro
             int triggerCount = triggerTimes!.Count;
             for (int i = startFloor; i < triggerCount; i++)
             {
-                var floor = floors[i];
+                var floor = floors![i];
                 if (floor == null) continue;
 
                 if (floor.nextfloor != null && floor.nextfloor.auto)
