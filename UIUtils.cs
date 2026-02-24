@@ -1,0 +1,536 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using UnityEngine;
+
+#nullable enable
+
+namespace BaseMacro
+{
+    public static class UIUtils
+    {
+        private static GUIStyle? _cardStyle;
+        private static GUIStyle? _headerStyle;
+        private static GUIStyle? _buttonStyle;
+        private static GUIStyle? _labelStyle;
+        private static GUIStyle? _textFieldStyle;
+        private static GUIStyle? _infoBoxStyle;
+        private static GUIStyle? _warningBoxStyle;
+        private static GUIStyle? _colorPickerLabelStyle;
+        private static readonly System.Collections.Generic.Dictionary<string, Texture2D> _textureCache = [];
+
+        public static GUIStyle CardStyle => _cardStyle ?? throw new InvalidOperationException("UI not initialized");
+        public static GUIStyle HeaderStyle => _headerStyle ?? throw new InvalidOperationException("UI not initialized");
+        public static GUIStyle ButtonStyle => _buttonStyle ?? throw new InvalidOperationException("UI not initialized");
+        public static GUIStyle LabelStyle => _labelStyle ?? throw new InvalidOperationException("UI not initialized");
+        public static GUIStyle TextFieldStyle => _textFieldStyle ?? throw new InvalidOperationException("UI not initialized");
+
+        public static void InitializeStyles()
+        {
+            if (_cardStyle != null) return;
+
+            // Android 14 / Material 3 Dark Palette
+            Color surfaceContainer = new(0.13f, 0.13f, 0.15f);
+            Color primary = new(0.66f, 0.76f, 1.0f);
+            Color onSurface = new(0.88f, 0.88f, 0.9f);
+            Color surfaceContainerHigh = new(0.17f, 0.17f, 0.19f);
+            Color errorContainer = new(0.35f, 0.1f, 0.1f);
+            Color onErrorContainer = new(1.0f, 0.7f, 0.7f);
+            Color infoContainer = new(0.1f, 0.2f, 0.35f);
+            Color onInfoContainer = new(0.7f, 0.85f, 1.0f);
+
+            _cardStyle = new GUIStyle(GUI.skin.box)
+            {
+                padding = new RectOffset(12, 12, 12, 12),
+                margin = new RectOffset(0, 0, 6, 6),
+                normal = { background = GetCachedRoundedTex(128, 128, 12, surfaceContainer) }
+            };
+
+            _headerStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 16,
+                fontStyle = FontStyle.Normal,
+                normal = { textColor = primary },
+                margin = new RectOffset(0, 0, 0, 8)
+            };
+
+            _labelStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13,
+                normal = { textColor = onSurface },
+                alignment = TextAnchor.MiddleLeft
+            };
+
+            _buttonStyle = new GUIStyle(GUI.skin.button)
+            {
+                fontSize = 12,
+                fixedHeight = 28,
+                padding = new RectOffset(12, 12, 0, 0),
+                normal = { background = GetCachedRoundedTex(64, 64, 8, surfaceContainerHigh), textColor = primary },
+                hover = { background = GetCachedRoundedTex(64, 64, 8, primary * 0.2f), textColor = Color.white },
+                active = { background = GetCachedRoundedTex(64, 64, 8, primary), textColor = Color.black }
+            };
+
+            _textFieldStyle = new GUIStyle(GUI.skin.textField)
+            {
+                fontSize = 12,
+                fixedHeight = 24,
+                alignment = TextAnchor.MiddleLeft,
+                padding = new RectOffset(8, 8, 0, 0),
+                // 提高非 Hover 状态下的亮度，并增加微弱的边框感（通过颜色对比）
+                normal = { background = GetCachedRoundedTex(64, 64, 4, new Color(0.25f, 0.25f, 0.28f)), textColor = onSurface },
+                hover = { background = GetCachedRoundedTex(64, 64, 4, new Color(0.35f, 0.35f, 0.4f)), textColor = Color.white },
+                focused = { background = GetCachedRoundedTex(64, 64, 4, new Color(0.4f, 0.4f, 0.45f)), textColor = Color.white }
+            };
+
+            _infoBoxStyle = new GUIStyle(GUI.skin.box)
+            {
+                padding = new RectOffset(10, 10, 8, 8),
+                margin = new RectOffset(0, 0, 4, 4),
+                alignment = TextAnchor.MiddleLeft,
+                fontSize = 12,
+                normal = { background = GetCachedRoundedTex(64, 64, 8, infoContainer), textColor = onInfoContainer }
+            };
+
+            _warningBoxStyle = new GUIStyle(GUI.skin.box)
+            {
+                padding = new RectOffset(10, 10, 8, 8),
+                margin = new RectOffset(0, 0, 4, 4),
+                alignment = TextAnchor.MiddleLeft,
+                fontSize = 12,
+                normal = { background = GetCachedRoundedTex(64, 64, 8, errorContainer), textColor = onErrorContainer }
+            };
+
+            _colorPickerLabelStyle = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 11,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = onSurface }
+            };
+        }
+
+        public static Color ColorPicker(Color color)
+        {
+            GUILayout.BeginVertical();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("R", _colorPickerLabelStyle, GUILayout.Width(15));
+            color.r = GUILayout.HorizontalSlider(color.r, 0f, 1f, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("G", _colorPickerLabelStyle, GUILayout.Width(15));
+            color.g = GUILayout.HorizontalSlider(color.g, 0f, 1f, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("B", _colorPickerLabelStyle, GUILayout.Width(15));
+            color.b = GUILayout.HorizontalSlider(color.b, 0f, 1f, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("A", _colorPickerLabelStyle, GUILayout.Width(15));
+            color.a = GUILayout.HorizontalSlider(color.a, 0f, 1f, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
+
+            // Preview color
+            Rect previewRect = GUILayoutUtility.GetRect(120, 12, GUILayout.ExpandWidth(true));
+            GUI.color = color;
+            GUI.DrawTexture(previewRect, GetCachedRoundedTex(64, 64, 4, Color.white));
+            GUI.color = Color.white;
+
+            GUILayout.EndVertical();
+
+            return color;
+        }
+
+        public static void DrawInfoBox(string text, bool isError = false)
+        {
+            GUILayout.Box(text, isError ? _warningBoxStyle : _infoBoxStyle, GUILayout.ExpandWidth(true));
+        }
+
+        public static bool M3Switch(bool value, string label)
+        {
+            GUILayout.BeginHorizontal(GUILayout.Height(32));
+            if (!string.IsNullOrEmpty(label)) GUILayout.Label(label, _labelStyle, GUILayout.ExpandWidth(true));
+
+            Color trackColor = value ? new(0.66f, 0.76f, 1.0f) : new(0.28f, 0.28f, 0.31f);
+            Color thumbColor = value ? new(0.0f, 0.2f, 0.4f) : new(0.55f, 0.55f, 0.58f);
+
+            Rect rect = GUILayoutUtility.GetRect(40, 24, GUILayout.Width(40), GUILayout.Height(24));
+
+            GUI.color = trackColor;
+            GUI.DrawTexture(rect, GetCachedRoundedTex(64, 32, 16, Color.white));
+
+            float thumbSize = 18;
+            float thumbX = value ? rect.x + rect.width - thumbSize - 3 : rect.x + 3;
+            Rect thumbRect = new(thumbX, rect.y + (rect.height - thumbSize) / 2, thumbSize, thumbSize);
+            GUI.color = thumbColor;
+            GUI.DrawTexture(thumbRect, GetCachedRoundedTex(32, 32, 16, Color.white));
+
+            GUI.color = Color.white;
+            if (GUI.Button(rect, "", GUIStyle.none)) value = !value;
+
+            GUILayout.EndHorizontal();
+            return value;
+        }
+
+        public static int M3SegmentedButton(int selectedIndex, string[] options)
+        {
+            GUILayout.BeginHorizontal();
+            for (int i = 0; i < options.Length; i++)
+            {
+                bool isSelected = selectedIndex == i;
+                Color primary = new(0.66f, 0.76f, 1.0f);
+                Color onSurfaceVariant = new(0.75f, 0.75f, 0.78f);
+                Color surfaceVariant = new(0.24f, 0.24f, 0.26f);
+
+                GUIStyle segmentStyle = new(ButtonStyle)
+                {
+                    fixedHeight = 30,
+                    margin = new RectOffset(0, 0, 0, 0),
+                    fontSize = 11,
+                    alignment = TextAnchor.MiddleCenter,
+                    normal = {
+                        background = GetCachedRoundedTex(64, 64, 0, isSelected ? primary : surfaceVariant),
+                        textColor = isSelected ? Color.black : onSurfaceVariant
+                    },
+                    hover = {
+                        background = GetCachedRoundedTex(64, 64, 0, isSelected ? primary : new Color(0.3f, 0.3f, 0.33f)),
+                        textColor = isSelected ? Color.black : Color.white
+                    }
+                };
+
+                // Round corners for ends
+                float r = 15;
+                if (i == 0)
+                {
+                    segmentStyle.normal.background = GetCachedRoundedTex(64, 64, r, isSelected ? primary : surfaceVariant, true, false, true, false);
+                    segmentStyle.hover.background = GetCachedRoundedTex(64, 64, r, isSelected ? primary : new Color(0.3f, 0.3f, 0.33f), true, false, true, false);
+                }
+                else if (i == options.Length - 1)
+                {
+                    segmentStyle.normal.background = GetCachedRoundedTex(64, 64, r, isSelected ? primary : surfaceVariant, false, true, false, true);
+                    segmentStyle.hover.background = GetCachedRoundedTex(64, 64, r, isSelected ? primary : new Color(0.3f, 0.3f, 0.33f), false, true, false, true);
+                }
+
+                if (GUILayout.Button(options[i], segmentStyle, GUILayout.ExpandWidth(true)))
+                {
+                    selectedIndex = i;
+                }
+            }
+            GUILayout.EndHorizontal();
+            return selectedIndex;
+        }
+
+        public static Texture2D GetCachedRoundedTex(int width, int height, float radius, Color col, bool tl = true, bool tr = true, bool bl = true, bool br = true)
+        {
+            string key = $"{width}_{height}_{radius}_{col.r}_{col.g}_{col.b}_{col.a}_{tl}{tr}{bl}{br}";
+            if (_textureCache.TryGetValue(key, out Texture2D tex) && tex != null) return tex;
+
+            tex = MakeRoundedTex(width, height, radius, col, tl, tr, bl, br);
+            tex.hideFlags = HideFlags.HideAndDontSave;
+            _textureCache[key] = tex;
+            return tex;
+        }
+
+        private static Texture2D MakeRoundedTex(int width, int height, float radius, Color col, bool tl = true, bool tr = true, bool bl = true, bool br = true)
+        {
+            Texture2D tex = new(width, height);
+            Color[] pix = new Color[width * height];
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float dx = -1, dy = -1;
+                    bool isCornerRegion = false;
+
+                    // Top-Left
+                    if (tl && x < radius && y >= height - radius) { dx = radius - x; dy = radius - (height - 1 - y); isCornerRegion = true; }
+                    // Top-Right
+                    else if (tr && x >= width - radius && y >= height - radius) { dx = radius - (width - 1 - x); dy = radius - (height - 1 - y); isCornerRegion = true; }
+                    // Bottom-Left
+                    else if (bl && x < radius && y < radius) { dx = radius - x; dy = radius - y; isCornerRegion = true; }
+                    // Bottom-Right
+                    else if (br && x >= width - radius && y < radius) { dx = radius - (width - 1 - x); dy = radius - y; isCornerRegion = true; }
+
+                    if (isCornerRegion)
+                    {
+                        float d = (float)Math.Sqrt(dx * dx + dy * dy);
+                        if (d > radius)
+                        {
+                            pix[y * width + x] = Color.clear;
+                        }
+                        else
+                        {
+                            float alpha = Math.Min(1, radius + 0.5f - d);
+                            pix[y * width + x] = new Color(col.r, col.g, col.b, col.a * alpha);
+                        }
+                    }
+                    else
+                    {
+                        pix[y * width + x] = col;
+                    }
+                }
+            }
+
+            tex.SetPixels(pix);
+            tex.Apply();
+            return tex;
+        }
+
+        public static Texture2D MakeSolidTex(int width, int height, Color col)
+        {
+            Texture2D tex = new(width, height);
+            Color[] pix = new Color[width * height];
+            for (int i = 0; i < pix.Length; i++) pix[i] = col;
+            tex.SetPixels(pix);
+            tex.Apply();
+            return tex;
+        }
+        public static float M3HorizontalSlider(float value, float leftValue, float rightValue, params GUILayoutOption[] options)
+        {
+            // 保存原始颜色
+            Color originalColor = GUI.color;
+            Color originalBackgroundColor = GUI.backgroundColor;
+            Color originalContentColor = GUI.contentColor;
+
+            // 定义颜色 - Material 3 配色
+            Color trackColor = new(0.28f, 0.28f, 0.31f);           // 轨道背景色
+            Color progressColor = new(0.66f, 0.76f, 1.0f);        // 进度条颜色
+            Color thumbColor = new(0.9f, 0.9f, 0.95f);             // 滑块颜色
+            Color hoverThumbColor = new(1.0f, 1.0f, 1.0f);         // 悬停时滑块颜色
+
+            // 计算当前进度
+            float normalizedValue = (value - leftValue) / (rightValue - leftValue);
+            normalizedValue = Mathf.Clamp01(normalizedValue);
+
+            // 获取滑块控制ID
+            int controlID = GUIUtility.GetControlID(FocusType.Passive);
+            Event currentEvent = Event.current;
+
+            // 处理鼠标交互
+            bool isDragging = GUIUtility.hotControl == controlID;
+
+            // 先通过GUILayout获取一个水平区域
+            GUILayout.BeginHorizontal();
+
+            // 获取滑动条区域 - 固定高度为24像素
+            Rect sliderRect = GUILayoutUtility.GetRect(0, 24, options);
+
+            // 添加一些左右边距
+            sliderRect.xMin += 4;
+            sliderRect.xMax -= 4;
+
+            // 检查鼠标是否悬停在滑块或轨道上
+            float thumbSize = 18; // 稍微增大滑块，更容易点击
+            float thumbY = sliderRect.y + (sliderRect.height - thumbSize) / 2;
+            float thumbCenterX = sliderRect.x + (sliderRect.width * normalizedValue);
+            float thumbX = thumbCenterX - thumbSize / 2;
+            Rect thumbRect = new(thumbX, thumbY, thumbSize, thumbSize);
+
+            bool isHovering = sliderRect.Contains(currentEvent.mousePosition) || thumbRect.Contains(currentEvent.mousePosition);
+
+            // 处理鼠标事件
+            switch (currentEvent.GetTypeForControl(controlID))
+            {
+                case EventType.MouseDown:
+                    if (sliderRect.Contains(currentEvent.mousePosition) || thumbRect.Contains(currentEvent.mousePosition))
+                    {
+                        GUIUtility.hotControl = controlID;
+
+                        // 直接跳转到点击位置
+                        float clickValue = (currentEvent.mousePosition.x - sliderRect.x) / sliderRect.width;
+                        value = leftValue + clickValue * (rightValue - leftValue);
+                        value = Mathf.Clamp(value, leftValue, rightValue);
+
+                        currentEvent.Use();
+                    }
+                    break;
+
+                case EventType.MouseDrag:
+                    if (GUIUtility.hotControl == controlID)
+                    {
+                        float dragValue = (currentEvent.mousePosition.x - sliderRect.x) / sliderRect.width;
+                        value = leftValue + dragValue * (rightValue - leftValue);
+                        value = Mathf.Clamp(value, leftValue, rightValue);
+                        currentEvent.Use();
+                    }
+                    break;
+
+                case EventType.MouseUp:
+                    if (GUIUtility.hotControl == controlID)
+                    {
+                        GUIUtility.hotControl = 0;
+                        currentEvent.Use();
+                    }
+                    break;
+
+                case EventType.Repaint:
+                    // 在Repaint阶段绘制所有UI元素
+
+                    // 1. 先绘制轨道背景（最底层）
+                    int radius = 12;
+                    GUI.color = trackColor;
+                    GUI.DrawTexture(sliderRect, GetCachedRoundedTex((int)sliderRect.width, (int)sliderRect.height, radius, Color.white));
+
+                    // 2. 再绘制进度条（中间层）
+                    float progressWidth = sliderRect.width * normalizedValue;
+                    if (progressWidth > 2) // 至少显示一点进度
+                    {
+                        Rect progressRect = new(sliderRect.x, sliderRect.y, progressWidth, sliderRect.height);
+                        GUI.color = progressColor;
+                        GUI.DrawTexture(progressRect, GetCachedRoundedTex((int)progressWidth, (int)sliderRect.height, radius, Color.white));
+                    }
+
+                    // 3. 最后绘制滑块（最上层）- 移到进度条上面
+                    GUI.color = isDragging || isHovering ? hoverThumbColor : thumbColor;
+                    float currentThumbSize = isDragging ? thumbSize + 2 : thumbSize; // 拖动时稍微放大
+                    float currentThumbX = sliderRect.x + (sliderRect.width * normalizedValue) - currentThumbSize / 2;
+                    float currentThumbY = sliderRect.y + (sliderRect.height - currentThumbSize) / 2;
+                    Rect currentThumbRect = new(currentThumbX, currentThumbY, currentThumbSize, currentThumbSize);
+
+                    // 绘制滑块阴影（稍微偏移，制造立体感）
+                    GUI.color = new Color(0, 0, 0, 0.2f);
+                    Rect shadowRect = new(currentThumbRect.x + 1, currentThumbRect.y + 1, currentThumbRect.width, currentThumbRect.height);
+                    GUI.DrawTexture(shadowRect, GetCachedRoundedTex((int)currentThumbSize, (int)currentThumbSize, (int)(currentThumbSize / 2), Color.white));
+
+                    // 绘制滑块本体
+                    GUI.color = isDragging || isHovering ? hoverThumbColor : thumbColor;
+                    GUI.DrawTexture(currentThumbRect, GetCachedRoundedTex((int)currentThumbSize, (int)currentThumbSize, (int)(currentThumbSize / 2), Color.white));
+
+                    break;
+            }
+
+            GUILayout.EndHorizontal();
+
+            // 恢复颜色
+            GUI.color = originalColor;
+            GUI.backgroundColor = originalBackgroundColor;
+            GUI.contentColor = originalContentColor;
+
+            return value;
+        }
+
+        // 添加一个带数值显示的滑动条
+        public static float M3HorizontalSliderWithValue(float value, float leftValue, float rightValue, string format = "F2", params GUILayoutOption[] options)
+        {
+            GUILayout.BeginHorizontal();
+
+            // 滑动条占据大部分空间
+            float newValue = M3HorizontalSlider(value, leftValue, rightValue, GUILayout.ExpandWidth(true));
+
+            // 显示数值
+            GUILayout.Space(8);
+            string valueText = value.ToString(format);
+            GUILayout.Label(valueText, _labelStyle, GUILayout.Width(50));
+
+            GUILayout.EndHorizontal();
+
+            return newValue;
+        }
+
+        // 添加一个带标签和数值的滑动条
+        public static float M3HorizontalSliderWithLabel(string label, float value, float leftValue, float rightValue, string format = "F2")
+        {
+            GUILayout.BeginHorizontal();
+
+            // 标签
+            GUILayout.Label(label, _labelStyle, GUILayout.Width(100));
+
+            // 滑动条
+            float newValue = M3HorizontalSlider(value, leftValue, rightValue, GUILayout.ExpandWidth(true));
+
+            // 数值
+            string valueText = value.ToString(format);
+            GUILayout.Label(valueText, _labelStyle, GUILayout.Width(50));
+
+            GUILayout.EndHorizontal();
+
+            return newValue;
+        }
+
+        // 添加一个整数滑动条
+        public static int M3HorizontalSliderInt(int value, int leftValue, int rightValue)
+        {
+            float floatValue = value;
+            float newFloatValue = M3HorizontalSlider(floatValue, leftValue, rightValue);
+            return Mathf.RoundToInt(newFloatValue);
+        }
+
+        // 添加一个带步进的滑动条
+        public static float M3HorizontalSliderStep(float value, float leftValue, float rightValue, float step)
+        {
+            float newValue = M3HorizontalSlider(value, leftValue, rightValue);
+
+            // 对齐到最近的步进值
+            if (step > 0)
+            {
+                newValue = Mathf.Round(newValue / step) * step;
+                newValue = Mathf.Clamp(newValue, leftValue, rightValue);
+            }
+
+            return newValue;
+        }
+
+        // 带输入框滑动条方法
+        public static float M3HorizontalSliderWithLabelAndInput(string label, float value, float leftValue, float rightValue,
+            ref string inputText, ref bool isFocused, string format = "F2", float labelWidth = 60, float sliderWidth = 120, float fieldWidth = 60)
+        {
+            GUILayout.BeginHorizontal();
+
+            // 标签
+            GUILayout.Label(label, _labelStyle, GUILayout.Width(labelWidth), GUILayout.Height(24));
+
+            // 滑动条 - 注意：这里不能再用 Begin/EndHorizontal，因为 M3HorizontalSlider 内部已经有布局了
+            float newValue = M3HorizontalSlider(value, leftValue, rightValue,
+                GUILayout.MinWidth(sliderWidth),
+                GUILayout.ExpandWidth(true));
+
+            GUILayout.Space(8);
+
+            // 输入框 - 使用垂直对齐辅助
+            GUILayout.BeginVertical(GUILayout.Height(24));
+            GUILayout.FlexibleSpace();
+            GUI.SetNextControlName("SliderInputField_" + label);
+            string newInput = GUILayout.TextField(inputText, TextFieldStyle,
+                GUILayout.Width(fieldWidth),
+                GUILayout.Height(36)); // 文本输入框的实际高度
+            GUILayout.FlexibleSpace();
+            GUILayout.EndVertical();
+
+            // 焦点管理（保持不变）
+            if (GUI.GetNameOfFocusedControl() == "SliderInputField_" + label)
+            {
+                if (!isFocused)
+                {
+                    inputText = newValue.ToString(format);
+                    isFocused = true;
+                }
+                else
+                {
+                    inputText = newInput;
+                }
+            }
+            else
+            {
+                if (isFocused)
+                {
+                    if (float.TryParse(inputText, out float parsedValue))
+                    {
+                        newValue = Mathf.Clamp(parsedValue, leftValue, rightValue);
+                    }
+                    isFocused = false;
+                }
+                inputText = newValue.ToString(format);
+            }
+
+            GUILayout.EndHorizontal();
+
+            return newValue;
+        }
+    }
+}

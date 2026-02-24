@@ -37,97 +37,62 @@ namespace BaseMacro
         /// </summary>
         public void OnGUI(UnityModManager.ModEntry modEntry)
         {
-            GUILayout.Label("Macro Settings | 宏设置", UnityModManager.UI.bold, GUILayout.Width(200));
-            Macro = GUILayout.Toggle(Macro, "Enable Macro | 启用宏");
+            UIUtils.InitializeStyles();
+
+            // 总标题
+            GUILayout.Label("Macro Settings | 宏设置", UIUtils.HeaderStyle);
+            GUILayout.BeginHorizontal();
+
+            // 主开关卡片（宽度紧凑，与下方卡片自然衔接）
+            GUILayout.BeginVertical(); // 开始外层垂直组
+            GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450)); // 开始内层卡片
+            Macro = UIUtils.M3Switch(Macro, "Enable Macro | 启用宏");
+            GUILayout.EndVertical(); // 结束内层卡片
 
             if (Macro)
             {
+                // 左侧：按键设置
+                GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450));
+                GUILayout.Label("按键设置", UIUtils.HeaderStyle);
+                GUILayout.Space(2);
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("Keys (comma separated) | 按键序列 (逗号分隔):");
-                MacroKeys = GUILayout.TextField(MacroKeys);
+                GUILayout.Label("Keys (comma separated) | 按键序列 (逗号分隔):", UIUtils.LabelStyle);
+                MacroKeys = GUILayout.TextField(MacroKeys, UIUtils.TextFieldStyle);
                 GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                SimulateKeyPress = GUILayout.Toggle(SimulateKeyPress, "Input key press (using WinAPI) | 输入按键 (使用Windows API)");
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                EnableKeyAdjust = GUILayout.Toggle(EnableKeyAdjust, "Enable Key Adjust | 允许方向键调整偏移");
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("调整步长:", GUILayout.Width(80));
-
-                // 滑块
-                AdjustStep = GUILayout.HorizontalSlider(AdjustStep, 0.1f, 10f, GUILayout.MinWidth(120));
-
-                // 输入框
-                GUI.SetNextControlName("AdjustStepField");
-                adjustStepInput = GUILayout.TextField(adjustStepInput, GUILayout.Width(60));
-
-                // 焦点管理
-                if (GUI.GetNameOfFocusedControl() == "AdjustStepField")
-                {
-                    if (!adjustStepFocused)
-                    {
-                        // 获得焦点时，用当前值初始化输入框
-                        adjustStepInput = AdjustStep.ToString("F2");
-                        adjustStepFocused = true;
-                    }
-                }
-                else
-                {
-                    if (adjustStepFocused)
-                    {
-                        // 失去焦点时，尝试解析输入并更新设置
-                        if (float.TryParse(adjustStepInput, out float newStep))
-                            AdjustStep = Mathf.Clamp(newStep, 0.1f, 10f);
-                        adjustStepFocused = false;
-                    }
-                    // 未获得焦点时，保持输入框显示当前设置值
-                    adjustStepInput = AdjustStep.ToString("F2");
-                }
-                GUILayout.EndHorizontal();
-
-                // 延迟设置（滑块 + 输入框）
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("延迟 (ms):", GUILayout.Width(80));
-
-                // 滑块（直接操作 TimeOffset 字段）
-                TimeOffset = GUILayout.HorizontalSlider(TimeOffset, -100f, 100f, GUILayout.MinWidth(120));
-
-                // 输入框
-                GUI.SetNextControlName("TimeOffsetField");
-                timeOffsetInput = GUILayout.TextField(timeOffsetInput, GUILayout.Width(60));
-
-                // 焦点管理
-                if (GUI.GetNameOfFocusedControl() == "TimeOffsetField")
-                {
-                    if (!timeOffsetFocused)
-                    {
-                        timeOffsetInput = TimeOffset.ToString("F2");
-                        timeOffsetFocused = true;
-                    }
-                }
-                else
-                {
-                    if (timeOffsetFocused)
-                    {
-                        if (float.TryParse(timeOffsetInput, out float newOffset))
-                            TimeOffset = Mathf.Clamp(newOffset, -100f, 100f);
-                        timeOffsetFocused = false;
-                    }
-                    timeOffsetInput = TimeOffset.ToString("F2");
-                }
-                GUILayout.EndHorizontal();
-
-                // 左右键调整开关
-                Main.Settings.EnableArrowTimeAdjust = GUILayout.Toggle(Main.Settings.EnableArrowTimeAdjust, "允许左右键调整延迟(游戏中)");
-                UseFramePrediction = GUILayout.Toggle(UseFramePrediction, "Use Frame Prediction (improves accuracy) | 使用帧预测（提高精度）");
+                GUILayout.Space(2);
+                SimulateKeyPress = UIUtils.M3Switch(SimulateKeyPress, "Input key press (using WinAPI) | 输入按键 (使用Windows API)");
+                GUILayout.EndVertical(); // 结束按键设置卡片
             }
-        }
+            GUILayout.EndVertical(); // 结束外层垂直组（主开关和按键设置的容器）
 
-        /// <summary>
+            if (Macro)
+            {
+                // 右侧：延迟设置
+                GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450));
+                GUILayout.Label("延迟设置", UIUtils.HeaderStyle);
+                GUILayout.Space(2);
+                EnableKeyAdjust = UIUtils.M3Switch(EnableKeyAdjust, "Enable Key Adjust | 允许方向键调整偏移");
+                GUILayout.Space(2);
+                GUILayout.Label("调整步长", UIUtils.LabelStyle);
+                GUILayout.BeginHorizontal();
+                AdjustStep = UIUtils.M3HorizontalSliderWithLabelAndInput("AdjustStepField", AdjustStep, 0.1f, 10f,
+                    ref adjustStepInput, ref adjustStepFocused, "F2", 120, 240, 60);
+                GUILayout.EndHorizontal();
+                GUILayout.Space(2);
+                GUILayout.Label("延迟 (ms)", UIUtils.LabelStyle);
+                GUILayout.BeginHorizontal();
+                TimeOffset = UIUtils.M3HorizontalSliderWithLabelAndInput("TimeOffsetField", TimeOffset, -100f, 100f,
+                    ref timeOffsetInput, ref timeOffsetFocused, "F2", 120, 240, 60);
+                GUILayout.EndHorizontal();
+                GUILayout.Space(2);
+                EnableArrowTimeAdjust = UIUtils.M3Switch(EnableArrowTimeAdjust, "允许左右键调整延迟(游戏中)");
+                GUILayout.Space(2);
+                UseFramePrediction = UIUtils.M3Switch(UseFramePrediction, "Use Frame Prediction (improves accuracy) | 使用帧预测（提高精度）");
+                GUILayout.EndVertical(); // 结束延迟设置卡片
+            }
+
+            GUILayout.EndHorizontal(); // 结束外层水平布局
+        }
         /// Called when saving GUI / 保存设置时调用
         /// </summary>
         public void OnSaveGUI(UnityModManager.ModEntry modEntry)
