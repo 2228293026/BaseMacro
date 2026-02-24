@@ -387,17 +387,11 @@ namespace BaseMacro
                     Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep + 0.1f, 0.1f, 10f);
                     Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
                 }
-                // Ctrl + A 切换 EnableKeyAdjust
-                if (Input.GetKeyDown(KeyCode.A))
-                {
-                    Main.Settings.EnableKeyAdjust = !Main.Settings.EnableKeyAdjust;
-                    Log($"[TimeBasedMacro] EnableKeyAdjust 切换为 {Main.Settings.EnableKeyAdjust}");
-                }
             }
             else
             {
                 // 无 Ctrl：左右方向键调整 TimeOffset
-                if (Main.Settings.EnableKeyAdjust)
+                if (Main.Settings.EnableArrowTimeAdjust)
                 {
                     if (Input.GetKeyDown(KeyCode.LeftArrow))
                     {

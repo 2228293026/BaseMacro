@@ -89,21 +89,21 @@ namespace BaseMacro
                 GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450));
                 GUILayout.Label("延迟设置", UIUtils.HeaderStyle);
                 GUILayout.Space(2);
-                EnableKeyAdjust = UIUtils.M3Switch(EnableKeyAdjust, "Enable Key Adjust | 允许方向键调整偏移");
+                EnableKeyAdjust = UIUtils.M3Switch(EnableKeyAdjust, "Allow adjusting step offset using Ctrl and arrow keys | 允许Ctrl+方向键调整步长偏移");
                 GUILayout.Space(2);
                 GUILayout.Label("调整步长", UIUtils.LabelStyle);
                 GUILayout.BeginHorizontal();
-                AdjustStep = UIUtils.M3HorizontalSliderWithLabelAndInput("AdjustStepField", AdjustStep, 0.1f, 10f,
+                AdjustStep = UIUtils.M3HorizontalSliderWithLabelAndInput("AdjustStep", AdjustStep, 0.1f, 10f,
                     ref adjustStepInput, ref adjustStepFocused, "F2", 120, 240, 60);
                 GUILayout.EndHorizontal();
                 GUILayout.Space(2);
                 GUILayout.Label("延迟 (ms)", UIUtils.LabelStyle);
                 GUILayout.BeginHorizontal();
-                TimeOffset = UIUtils.M3HorizontalSliderWithLabelAndInput("TimeOffsetField", TimeOffset, -100f, 100f,
+                TimeOffset = UIUtils.M3HorizontalSliderWithLabelAndInput("TimeOffset", TimeOffset, -100f, 100f,
                     ref timeOffsetInput, ref timeOffsetFocused, "F2", 120, 240, 60);
                 GUILayout.EndHorizontal();
                 GUILayout.Space(2);
-                EnableArrowTimeAdjust = UIUtils.M3Switch(EnableArrowTimeAdjust, "允许左右键调整延迟(游戏中)");
+                EnableArrowTimeAdjust = UIUtils.M3Switch(EnableArrowTimeAdjust, "Allow adjustment of delay using left and right keys (in-game) | 允许左右键调整延迟(游戏中)");
                 GUILayout.Space(2);
                 UseFramePrediction = UIUtils.M3Switch(UseFramePrediction, "Use Frame Prediction (improves accuracy) | 使用帧预测（提高精度）");
                 GUILayout.EndVertical(); // 结束延迟设置卡片
