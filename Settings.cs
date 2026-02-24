@@ -54,7 +54,7 @@ namespace BaseMacro
             UIUtils.InitializeStyles();
 
             // 总标题
-            GUILayout.Label("Macro Settings | 宏设置", UIUtils.HeaderStyle);
+            GUILayout.Label("Macro | 宏", UIUtils.HeaderStyle);
             GUILayout.BeginHorizontal();
 
             // 主开关卡片（宽度紧凑，与下方卡片自然衔接）
@@ -71,7 +71,7 @@ namespace BaseMacro
             {
                 // 左侧：按键设置
                 GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450));
-                GUILayout.Label("按键设置", UIUtils.HeaderStyle);
+                GUILayout.Label("Key Settings | 按键设置", UIUtils.HeaderStyle);
                 GUILayout.Space(2);
                 GUILayout.BeginHorizontal();
                 GUILayout.Label("Keys (comma separated) | 按键序列 (逗号分隔):", UIUtils.LabelStyle);
@@ -87,7 +87,7 @@ namespace BaseMacro
             {
                 // 右侧：延迟设置
                 GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450));
-                GUILayout.Label("延迟设置", UIUtils.HeaderStyle);
+                GUILayout.Label("Offset Settings | 延迟设置", UIUtils.HeaderStyle);
                 GUILayout.Space(2);
                 EnableKeyAdjust = UIUtils.M3Switch(EnableKeyAdjust, "Allow adjusting step offset using Ctrl and arrow keys | 允许Ctrl+方向键调整步长偏移");
                 GUILayout.Space(2);
