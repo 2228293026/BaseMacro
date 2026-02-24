@@ -377,15 +377,18 @@ namespace BaseMacro
             if (ctrl)
             {
                 // Ctrl + Left/Right 调整 AdjustStep
-                if (Input.GetKeyDown(KeyCode.LeftArrow))
+                if (Main.Settings.EnableKeyAdjust)
                 {
-                    Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep - 0.1f, 0.1f, 10f);
-                    Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
-                }
-                if (Input.GetKeyDown(KeyCode.RightArrow))
-                {
-                    Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep + 0.1f, 0.1f, 10f);
-                    Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
+                    if (Input.GetKeyDown(KeyCode.LeftArrow))
+                    {
+                        Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep - 0.1f, 0.1f, 10f);
+                        Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
+                    }
+                    if (Input.GetKeyDown(KeyCode.RightArrow))
+                    {
+                        Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep + 0.1f, 0.1f, 10f);
+                        Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
+                    }
                 }
             }
             else
