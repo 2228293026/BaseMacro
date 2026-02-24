@@ -21,8 +21,6 @@ namespace BaseMacro
         private static scrLevelMaker? levelMaker;
         private static scrConductor? conductor;
 
-        private static readonly bool enableLog = false;
-
         private static readonly List<byte> keyCodes = [];
         private static int keyIndex = 0;
 
@@ -87,10 +85,12 @@ namespace BaseMacro
         private const uint KEYEVENTF_KEYUP = 2;
 
         // 缓存虚拟键码到扫描码的映射
-        private static readonly Dictionary<byte, ushort> scanCodeCache = new Dictionary<byte, ushort>();
+        private static readonly Dictionary<byte, ushort> scanCodeCache = new(10);
 
         // 按键事件队列，用于批量处理
-        private static readonly Queue<KeyEvent> pendingKeyEvents = new Queue<KeyEvent>(16);
+        private static readonly Queue<KeyEvent> pendingKeyEvents = new(16);
+
+        private static INPUT[] inputs = new INPUT[16]; // 预设最大事件数
 
         private struct KeyEvent
         {
@@ -101,11 +101,10 @@ namespace BaseMacro
         // 批量发送按键事件
         private static void FlushKeyEvents()
         {
-            if (pendingKeyEvents.Count == 0) return;
-
-            var inputs = new INPUT[pendingKeyEvents.Count];
+            int count = pendingKeyEvents.Count;
+            if (count == 0) return; if (count > inputs.Length)
+                Array.Resize(ref inputs, count);
             int index = 0;
-
             foreach (var evt in pendingKeyEvents)
             {
                 // 获取扫描码（缓存结果）
@@ -181,7 +180,7 @@ namespace BaseMacro
             {
                 SyncLastTriggeredFloor(conductor.songposition_minusi);
             }
-            if (enableLog) Debug.Log($"[TimeBasedMacro] 初始化完成，共 {floorCount} 个触发点");
+            Log($"[TimeBasedMacro] 初始化完成，共 {floorCount} 个触发点");
         }
 
         public static void Reset()
@@ -203,7 +202,7 @@ namespace BaseMacro
             isKeyDown = false;
             pendingKeyEvents.Clear();
 
-            if (enableLog) Debug.Log("[TimeBasedMacro] 状态已重置");
+            Log("[TimeBasedMacro] 状态已重置");
         }
 
         // 解析按键设置字符串，转换为虚拟键码列表
@@ -255,6 +254,11 @@ namespace BaseMacro
             if (controller?.paused != false) return;
             if (ADOBase.sceneName == GCNS.sceneLevelSelect) return;
 
+            var lm = levelMaker;
+            var cond = conductor;
+            if (lm == null || cond == null) return;
+            var floors = lm.listFloors;
+
             if (!initialized || NeedReinitialize())
             {
                 Reset();
@@ -262,16 +266,18 @@ namespace BaseMacro
                 if (!initialized) return;
             }
 
-            double currentTime = conductor!.songposition_minusi;
+            double currentTime = cond!.songposition_minusi;
             double nextFrameTime = currentTime + Time.unscaledDeltaTime; // 预测的下一帧时间
 
             // 从上一个触发的地板之后开始检查
             int startFloor = lastTriggeredFloor + 1;
             bool keyStateChanged = false;
 
-            for (int i = startFloor; i < triggerTimes!.Count; i++)
+            UpdateKeyCodes();
+            int triggerCount = triggerTimes!.Count;
+            for (int i = startFloor; i < triggerCount; i++)
             {
-                var floor = levelMaker?.listFloors[i];
+                var floor = floors[i];
                 if (floor == null) continue;
 
                 if (floor.nextfloor != null && floor.nextfloor.auto)
@@ -291,9 +297,9 @@ namespace BaseMacro
                 // 如果当前地板是长按，且下一个地板不是长按
                 if (Main.Settings.SimulateKeyPress)
                 {
-                    if (floor.holdLength > -1 && i + 1 < triggerTimes.Count)
+                    if (floor.holdLength > -1 && i + 1 < triggerCount)
                     {
-                        var nextFloor = levelMaker?.listFloors[i + 1];
+                        var nextFloor = floors[i + 1];
                         if (nextFloor != null && nextFloor.holdLength == -1)
                         {
                             releaseOnly = true;
@@ -308,8 +314,6 @@ namespace BaseMacro
                 {
                     if (i <= lastTriggeredFloor) continue;
 
-                    UpdateKeyCodes();
-
                     if (releaseOnly)
                     {
                         // 情况1: 只释放按键，不按下新键
@@ -317,20 +321,18 @@ namespace BaseMacro
                         {
                             UpdateKeyState(null);
                             keyStateChanged = true;
-                            if (enableLog) Debug.Log($"[TimeBasedMacro] 地板 {i} 释放所有按键（下一个不是长按）");
+                            Log($"[TimeBasedMacro] 地板 {i} 释放所有按键（下一个不是长按）");
                         }
 
                         // 跳过下一个地板（将其标记为已处理）
                         if (i + 1 > lastTriggeredFloor)
                         {
                             lastTriggeredFloor = i + 1;
-                            if (enableLog) Debug.Log($"[TimeBasedMacro] 跳过普通地板 {i + 1}");
+                            Log($"[TimeBasedMacro] 跳过普通地板 {i + 1}");
                         }
                     }
                     else
                     {
-                        // 情况2: 正常触发，需要按下新键
-
                         // 触发点击
                         if (!Main.Settings.SimulateKeyPress)
                             controller.Hit(false);
@@ -348,8 +350,7 @@ namespace BaseMacro
 
                     lastTriggeredFloor = i;
 
-                    if (enableLog)
-                        Debug.Log($"[TimeBasedMacro] 触发地板 {i}，时间 {currentTime:F6}s，理论 {triggerTime:F6}s，偏移 {TimeOffset}ms，releaseOnly={releaseOnly}");
+                    Log($"[TimeBasedMacro] 触发地板 {i}，时间 {currentTime:F6}s，理论 {triggerTime:F6}s，偏移 {TimeOffset}ms，releaseOnly={releaseOnly}");
                 }
                 else
                 {
@@ -382,18 +383,18 @@ namespace BaseMacro
                 if (Input.GetKeyDown(KeyCode.LeftArrow))
                 {
                     Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep - 0.1f, 0.1f, 10f);
-                    if (enableLog) Debug.Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
+                    Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
                 }
                 if (Input.GetKeyDown(KeyCode.RightArrow))
                 {
                     Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep + 0.1f, 0.1f, 10f);
-                    if (enableLog) Debug.Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
+                    Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
                 }
                 // Ctrl + A 切换 EnableKeyAdjust
                 if (Input.GetKeyDown(KeyCode.A))
                 {
                     Main.Settings.EnableKeyAdjust = !Main.Settings.EnableKeyAdjust;
-                    if (enableLog) Debug.Log($"[TimeBasedMacro] EnableKeyAdjust 切换为 {Main.Settings.EnableKeyAdjust}");
+                    Log($"[TimeBasedMacro] EnableKeyAdjust 切换为 {Main.Settings.EnableKeyAdjust}");
                 }
             }
             else
@@ -402,12 +403,12 @@ namespace BaseMacro
                 if (Input.GetKeyDown(KeyCode.LeftArrow))
                 {
                     TimeOffset -= Main.Settings.AdjustStep;
-                    if (enableLog) Debug.Log($"[TimeBasedMacro] 偏移调整为 {TimeOffset}ms");
+                    Log($"[TimeBasedMacro] 偏移调整为 {TimeOffset}ms");
                 }
                 if (Input.GetKeyDown(KeyCode.RightArrow))
                 {
                     TimeOffset += Main.Settings.AdjustStep;
-                    if (enableLog) Debug.Log($"[TimeBasedMacro] 偏移调整为 {TimeOffset}ms");
+                    Log($"[TimeBasedMacro] 偏移调整为 {TimeOffset}ms");
                 }
             }
         }
@@ -424,8 +425,13 @@ namespace BaseMacro
             // 此时 lastTriggeredFloor 应为最后一个索引
             lastTriggeredFloor = index - 1;
 
-            if (enableLog)
-                Debug.Log($"[TimeBasedMacro] 同步到当前时间 {currentTime:F6}s，lastTriggeredFloor = {lastTriggeredFloor}");
+            Log($"[TimeBasedMacro] 同步到当前时间 {currentTime:F6}s，lastTriggeredFloor = {lastTriggeredFloor}");
+        }
+
+        [System.Diagnostics.Conditional("DEBUG")]
+        private static void Log(string message)
+        {
+            Main.Mod?.Logger.Log(message);
         }
     }
 }
