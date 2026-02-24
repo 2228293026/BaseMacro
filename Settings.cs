@@ -22,7 +22,15 @@ namespace BaseMacro
 
         public bool UseFramePrediction = true;   // 启用帧预测提升精度
 
-       
+        public float TimeOffset = 0;
+
+        public bool EnableArrowTimeAdjust = true; // 默认开启
+
+
+        private string adjustStepInput = "";
+        private string timeOffsetInput = "";
+        private bool adjustStepFocused = false;
+        private bool timeOffsetFocused = false;
 
         /// <summary>
         /// Draw mod GUI / 绘制 Mod GUI
@@ -48,14 +56,73 @@ namespace BaseMacro
                 GUILayout.EndHorizontal();
 
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("Adjust Step (ms) | 调整步长(毫秒):");
-                string stepStr = GUILayout.TextField(AdjustStep.ToString(), GUILayout.Width(50));
-                float.TryParse(stepStr, out AdjustStep);
-                AdjustStep = Mathf.Clamp(AdjustStep, 0.1f, 10f);
+                GUILayout.Label("调整步长:", GUILayout.Width(80));
+
+                // 滑块
+                AdjustStep = GUILayout.HorizontalSlider(AdjustStep, 0.1f, 10f, GUILayout.MinWidth(120));
+
+                // 输入框
+                GUI.SetNextControlName("AdjustStepField");
+                adjustStepInput = GUILayout.TextField(adjustStepInput, GUILayout.Width(60));
+
+                // 焦点管理
+                if (GUI.GetNameOfFocusedControl() == "AdjustStepField")
+                {
+                    if (!adjustStepFocused)
+                    {
+                        // 获得焦点时，用当前值初始化输入框
+                        adjustStepInput = AdjustStep.ToString("F2");
+                        adjustStepFocused = true;
+                    }
+                }
+                else
+                {
+                    if (adjustStepFocused)
+                    {
+                        // 失去焦点时，尝试解析输入并更新设置
+                        if (float.TryParse(adjustStepInput, out float newStep))
+                            AdjustStep = Mathf.Clamp(newStep, 0.1f, 10f);
+                        adjustStepFocused = false;
+                    }
+                    // 未获得焦点时，保持输入框显示当前设置值
+                    adjustStepInput = AdjustStep.ToString("F2");
+                }
                 GUILayout.EndHorizontal();
 
-                GUILayout.Label("Use Left/Right arrows to adjust TimeOffset | 使用左右方向键调整偏移量");
-                GUILayout.Label($"Current TimeOffset: {TimeBasedMacro.TimeOffset} ms");
+                // 延迟设置（滑块 + 输入框）
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("延迟 (ms):", GUILayout.Width(80));
+
+                // 滑块（直接操作 TimeOffset 字段）
+                TimeOffset = GUILayout.HorizontalSlider(TimeOffset, -100f, 100f, GUILayout.MinWidth(120));
+
+                // 输入框
+                GUI.SetNextControlName("TimeOffsetField");
+                timeOffsetInput = GUILayout.TextField(timeOffsetInput, GUILayout.Width(60));
+
+                // 焦点管理
+                if (GUI.GetNameOfFocusedControl() == "TimeOffsetField")
+                {
+                    if (!timeOffsetFocused)
+                    {
+                        timeOffsetInput = TimeOffset.ToString("F2");
+                        timeOffsetFocused = true;
+                    }
+                }
+                else
+                {
+                    if (timeOffsetFocused)
+                    {
+                        if (float.TryParse(timeOffsetInput, out float newOffset))
+                            TimeOffset = Mathf.Clamp(newOffset, -100f, 100f);
+                        timeOffsetFocused = false;
+                    }
+                    timeOffsetInput = TimeOffset.ToString("F2");
+                }
+                GUILayout.EndHorizontal();
+
+                // 左右键调整开关
+                Main.Settings.EnableArrowTimeAdjust = GUILayout.Toggle(Main.Settings.EnableArrowTimeAdjust, "允许左右键调整延迟(游戏中)");
                 UseFramePrediction = GUILayout.Toggle(UseFramePrediction, "Use Frame Prediction (improves accuracy) | 使用帧预测（提高精度）");
             }
         }

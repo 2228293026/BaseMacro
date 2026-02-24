@@ -10,8 +10,6 @@ namespace BaseMacro
 {
     internal static class TimeBasedMacro
     {
-        public static float TimeOffset = 0.0f;
-
         private static List<double>? triggerTimes;
         private static int lastTriggeredFloor = -1;
         private static int floorCount;
@@ -307,7 +305,7 @@ namespace BaseMacro
                 }
 
                 double triggerTime = triggerTimes[i];
-                double adjustedTrigger = triggerTime + TimeOffset * 0.001;
+                double adjustedTrigger = triggerTime + Main.Settings.TimeOffset * 0.001;
 
                 if (adjustedTrigger <= nextFrameTime + 1e-15)
                 {
@@ -349,7 +347,7 @@ namespace BaseMacro
 
                     lastTriggeredFloor = i;
 
-                    Log($"[TimeBasedMacro] 触发地板 {i}，时间 {currentTime:F6}s，理论 {triggerTime:F6}s，偏移 {TimeOffset}ms，releaseOnly={releaseOnly}");
+                    Log($"[TimeBasedMacro] 触发地板 {i}，时间 {currentTime:F6}s，理论 {triggerTime:F6}s，偏移 {Main.Settings.TimeOffset}ms，releaseOnly={releaseOnly}");
                 }
                 else
                 {
@@ -399,15 +397,18 @@ namespace BaseMacro
             else
             {
                 // 无 Ctrl：左右方向键调整 TimeOffset
-                if (Input.GetKeyDown(KeyCode.LeftArrow))
+                if (Main.Settings.EnableKeyAdjust)
                 {
-                    TimeOffset -= Main.Settings.AdjustStep;
-                    Log($"[TimeBasedMacro] 偏移调整为 {TimeOffset}ms");
-                }
-                if (Input.GetKeyDown(KeyCode.RightArrow))
-                {
-                    TimeOffset += Main.Settings.AdjustStep;
-                    Log($"[TimeBasedMacro] 偏移调整为 {TimeOffset}ms");
+                    if (Input.GetKeyDown(KeyCode.LeftArrow))
+                    {
+                        Main.Settings.TimeOffset -= Main.Settings.AdjustStep;
+                        Log($"[TimeBasedMacro] 偏移调整为 {Main.Settings.TimeOffset}ms");
+                    }
+                    if (Input.GetKeyDown(KeyCode.RightArrow))
+                    {
+                        Main.Settings.TimeOffset += Main.Settings.AdjustStep;
+                        Log($"[TimeBasedMacro] 偏移调整为 {Main.Settings.TimeOffset}ms");
+                    }
                 }
             }
         }
