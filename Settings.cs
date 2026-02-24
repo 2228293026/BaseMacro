@@ -12,9 +12,23 @@ namespace BaseMacro
     /// </summary>
     public class Settings : UnityModManager.ModSettings
     {
-        public bool Macro = false;
+        public event Action<bool> OnMacroChanged; // 添加事件
 
-        public string MacroKeys = "J";                // 按键序列，逗号分隔，如 "Q,W,E,R"
+        private bool _macro;
+        public bool Macro
+        {
+            get => _macro;
+            set
+            {
+                if (_macro != value)
+                {
+                    _macro = value;
+                    OnMacroChanged?.Invoke(value); // 触发事件
+                }
+            }
+        }
+
+        public string MacroKeys = "D,F,J,K";                // 按键序列，逗号分隔，如 "Q,W,E,R"
         public bool SimulateKeyPress = false;         // 是否模拟按键输入（若 false 则仅调用 Hit）
 
         public bool EnableKeyAdjust = true;   // 允许方向键调整偏移
@@ -46,7 +60,11 @@ namespace BaseMacro
             // 主开关卡片（宽度紧凑，与下方卡片自然衔接）
             GUILayout.BeginVertical(); // 开始外层垂直组
             GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450)); // 开始内层卡片
-            Macro = UIUtils.M3Switch(Macro, "Enable Macro | 启用宏");
+            bool newMacro = UIUtils.M3Switch(Macro, "Enable Macro | 启用宏");
+            if (newMacro != Macro)
+            {
+                Macro = newMacro; // 通过属性设置，会触发事件
+            }
             GUILayout.EndVertical(); // 结束内层卡片
 
             if (Macro)
