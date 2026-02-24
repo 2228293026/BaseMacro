@@ -27,14 +27,142 @@ namespace BaseMacro
         private static int keyIndex = 0;
 
         private static byte? pendingKey = null;
+        private static bool isKeyDown = false; // 跟踪按键状态
 
         private static string lastKeysSetting = "";
 
-        // Windows API
+        // Windows API - 使用 SendInput 替代 keybd_event
         [DllImport("user32.dll")]
-        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [DllImport("user32.dll")]
+        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct INPUT
+        {
+            public uint type;
+            public InputUnion u;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InputUnion
+        {
+            [FieldOffset(0)] public MOUSEINPUT mi;
+            [FieldOffset(0)] public KEYBDINPUT ki;
+            [FieldOffset(0)] public HARDWAREINPUT hi;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct HARDWAREINPUT
+        {
+            public uint uMsg;
+            public ushort wParamL;
+            public ushort wParamH;
+        }
+
+        private const uint INPUT_KEYBOARD = 1;
         private const uint KEYEVENTF_KEYDOWN = 0;
         private const uint KEYEVENTF_KEYUP = 2;
+
+        // 缓存虚拟键码到扫描码的映射
+        private static readonly Dictionary<byte, ushort> scanCodeCache = new Dictionary<byte, ushort>();
+
+        // 按键事件队列，用于批量处理
+        private static readonly Queue<KeyEvent> pendingKeyEvents = new Queue<KeyEvent>(16);
+
+        private struct KeyEvent
+        {
+            public byte keyCode;
+            public bool isDown;
+        }
+
+        // 批量发送按键事件
+        private static void FlushKeyEvents()
+        {
+            if (pendingKeyEvents.Count == 0) return;
+
+            var inputs = new INPUT[pendingKeyEvents.Count];
+            int index = 0;
+
+            foreach (var evt in pendingKeyEvents)
+            {
+                // 获取扫描码（缓存结果）
+                if (!scanCodeCache.TryGetValue(evt.keyCode, out ushort scanCode))
+                {
+                    scanCode = (ushort)MapVirtualKey(evt.keyCode, 0);
+                    scanCodeCache[evt.keyCode] = scanCode;
+                }
+
+                inputs[index].type = INPUT_KEYBOARD;
+                inputs[index].u.ki = new KEYBDINPUT
+                {
+                    wVk = evt.keyCode,
+                    wScan = scanCode,
+                    dwFlags = evt.isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP,
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero
+                };
+                index++;
+            }
+
+            if (index > 0)
+            {
+                SendInput((uint)index, inputs, Marshal.SizeOf(typeof(INPUT)));
+            }
+
+            pendingKeyEvents.Clear();
+        }
+
+        // 队列化按键事件
+        private static void QueueKeyEvent(byte keyCode, bool isDown)
+        {
+            pendingKeyEvents.Enqueue(new KeyEvent { keyCode = keyCode, isDown = isDown });
+        }
+
+        // 更新按键状态（智能去重）
+        private static void UpdateKeyState(byte? newKey)
+        {
+            // 如果需要释放当前按键
+            if (isKeyDown && pendingKey.HasValue)
+            {
+                if (!newKey.HasValue || newKey.Value != pendingKey.Value)
+                {
+                    QueueKeyEvent(pendingKey.Value, false);
+                    isKeyDown = false;
+                    pendingKey = null;
+                }
+            }
+
+            // 如果需要按下新按键
+            if (newKey.HasValue && (!isKeyDown || newKey.Value != pendingKey))
+            {
+                QueueKeyEvent(newKey.Value, true);
+                pendingKey = newKey;
+                isKeyDown = true;
+            }
+        }
 
         private static void Initialize()
         {
@@ -63,12 +191,18 @@ namespace BaseMacro
             triggerTimes = null;
             levelMaker = null;
             conductor = null;
-            // 释放可能残留的按键
-            if (pendingKey.HasValue)
+
+            // 释放可能残留的按键（使用新方法）
+            if (isKeyDown && pendingKey.HasValue)
             {
-                keybd_event(pendingKey.Value, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                pendingKey = null;
+                UpdateKeyState(null);
+                FlushKeyEvents();
             }
+
+            pendingKey = null;
+            isKeyDown = false;
+            pendingKeyEvents.Clear();
+
             if (enableLog) Debug.Log("[TimeBasedMacro] 状态已重置");
         }
 
@@ -89,7 +223,6 @@ namespace BaseMacro
                 if (string.IsNullOrEmpty(keyName)) continue;
 
                 // 尝试将键名转换为虚拟键码
-                // 对于字母键，可以直接取 ASCII 码
                 if (keyName.Length == 1)
                 {
                     char c = keyName[0];
@@ -116,22 +249,8 @@ namespace BaseMacro
 
             keyIndex = 0; // 重置索引
         }
-        private static double GetHoldEndTime(scrFloor floor, scrConductor conductor)
-        {
-            double spb = 60.0 / conductor.bpm;
-            return floor.entryTime + floor.holdLength * spb;
-        }
-        private static bool NextPendingFloorIsHold()
-        {
-            int nextIndex = lastTriggeredFloor + 1;
-            if (nextIndex < 0 || nextIndex >= (levelMaker?.listFloors.Count ?? 0))
-                return false;
-            var nextFloor = levelMaker?.listFloors[nextIndex];
-            return nextFloor != null && nextFloor.holdLength != -1;
-        }
         public static void Update(scrController controller)
         {
-
             if (!Main.Settings.Macro) return;
             if (controller?.paused != false) return;
             if (ADOBase.sceneName == GCNS.sceneLevelSelect) return;
@@ -148,6 +267,8 @@ namespace BaseMacro
 
             // 从上一个触发的地板之后开始检查
             int startFloor = lastTriggeredFloor + 1;
+            bool keyStateChanged = false;
+
             for (int i = startFloor; i < triggerTimes!.Count; i++)
             {
                 var floor = levelMaker?.listFloors[i];
@@ -163,14 +284,7 @@ namespace BaseMacro
                     lastTriggeredFloor = i;
                     continue;
                 }
-                if (floor.nextfloor != null && floor.nextfloor.auto)
-                {
-                    if (pendingKey.HasValue)
-                    {
-                        keybd_event(pendingKey.Value, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                        pendingKey = null;
-                    }
-                }
+
                 // 判断是否需要只释放按键而不按下新键
                 bool releaseOnly = false;
 
@@ -192,7 +306,6 @@ namespace BaseMacro
 
                 if (adjustedTrigger <= nextFrameTime + 1e-15)
                 {
-
                     if (i <= lastTriggeredFloor) continue;
 
                     UpdateKeyCodes();
@@ -200,13 +313,12 @@ namespace BaseMacro
                     if (releaseOnly)
                     {
                         // 情况1: 只释放按键，不按下新键
-                        if (Main.Settings.SimulateKeyPress && pendingKey.HasValue)
+                        if (Main.Settings.SimulateKeyPress && isKeyDown)
                         {
-                            keybd_event(pendingKey.Value, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                            pendingKey = null;
+                            UpdateKeyState(null);
+                            keyStateChanged = true;
                             if (enableLog) Debug.Log($"[TimeBasedMacro] 地板 {i} 释放所有按键（下一个不是长按）");
                         }
-
 
                         // 跳过下一个地板（将其标记为已处理）
                         if (i + 1 > lastTriggeredFloor)
@@ -226,16 +338,11 @@ namespace BaseMacro
                         // 模拟按键
                         if (Main.Settings.SimulateKeyPress && keyCodes.Count > 0)
                         {
-                            if (pendingKey.HasValue)
-                            {
-                                keybd_event(pendingKey.Value, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                                pendingKey = null;
-                            }
-
                             byte key = keyCodes[keyIndex];
                             keyIndex = (keyIndex + 1) % keyCodes.Count;
-                            keybd_event(key, 0, KEYEVENTF_KEYDOWN, UIntPtr.Zero);
-                            pendingKey = key;
+
+                            UpdateKeyState(key);
+                            keyStateChanged = true;
                         }
                     }
 
@@ -246,11 +353,17 @@ namespace BaseMacro
                 }
                 else
                 {
-
                     break;
                 }
             }
+
+            // 每帧只发送一次批量按键事件
+            if (keyStateChanged || pendingKeyEvents.Count > 0)
+            {
+                FlushKeyEvents();
+            }
         }
+
         private static bool NeedReinitialize()
         {
             var lm = levelMaker ?? scrLevelMaker.instance;
@@ -298,11 +411,12 @@ namespace BaseMacro
                 }
             }
         }
+
         private static void SyncLastTriggeredFloor(double currentTime)
         {
             if (triggerTimes == null || triggerTimes.Count == 0) return;
 
-            // 分查找第一个触发时间 > currentTime 的索引
+            // 二分查找第一个触发时间 > currentTime 的索引
             int index = triggerTimes.BinarySearch(currentTime);
             if (index < 0) index = ~index; // 获取大于 currentTime 的第一个索引
 
