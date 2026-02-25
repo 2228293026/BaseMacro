@@ -570,10 +570,6 @@ namespace BaseMacro
             Color surfaceContainerHigh = new(0.17f, 0.17f, 0.19f);
             Color onSurfaceVariant = new(0.75f, 0.75f, 0.78f);
 
-            // 计算每个按钮的宽度
-            float totalWidth = GUILayoutUtility.GetRect(0, 0, options).width;
-            float buttonWidth = (totalWidth - (xCount - 1) * 2) / xCount;
-
             GUILayout.BeginHorizontal();
 
             for (int i = 0; i < texts.Length; i++)
@@ -583,7 +579,9 @@ namespace BaseMacro
                 // 为每个按钮创建样式
                 GUIStyle buttonStyle = new GUIStyle(_selectionGridStyle)
                 {
-                    fixedHeight = 28
+                    fixedHeight = 28,
+                    margin = new RectOffset(1, 1, 0, 0),
+                    padding = new RectOffset(4, 4, 4, 4)
                 };
 
                 // 设置圆角
@@ -593,19 +591,26 @@ namespace BaseMacro
                 bool bl = (i == 0);
                 bool br = (i == texts.Length - 1);
 
+                // 使用动态尺寸的纹理，根据实际按钮宽度生成
+                int textureWidth = 64; // 基础宽度
+
                 if (isSelected)
                 {
-                    buttonStyle.normal.background = GetCachedRoundedTex(64, 64, radius, primary, tl, tr, bl, br);
+                    buttonStyle.normal.background = GetCachedRoundedTex(textureWidth, 64, radius, primary, tl, tr, bl, br);
                     buttonStyle.normal.textColor = Color.black;
+                    buttonStyle.hover.background = GetCachedRoundedTex(textureWidth, 64, radius, primary * 1.1f, tl, tr, bl, br);
+                    buttonStyle.hover.textColor = Color.black;
                 }
                 else
                 {
-                    buttonStyle.normal.background = GetCachedRoundedTex(64, 64, radius, surfaceContainerHigh, tl, tr, bl, br);
+                    buttonStyle.normal.background = GetCachedRoundedTex(textureWidth, 64, radius, surfaceContainerHigh, tl, tr, bl, br);
                     buttonStyle.normal.textColor = onSurfaceVariant;
+                    buttonStyle.hover.background = GetCachedRoundedTex(textureWidth, 64, radius, primary * 0.3f, tl, tr, bl, br);
+                    buttonStyle.hover.textColor = Color.white;
                 }
 
-                // 绘制按钮
-                if (GUILayout.Button(texts[i], buttonStyle, GUILayout.Width(buttonWidth)))
+                // 让按钮平分宽度
+                if (GUILayout.Button(texts[i], buttonStyle, GUILayout.ExpandWidth(true)))
                 {
                     newSelected = i;
                 }
@@ -615,7 +620,6 @@ namespace BaseMacro
 
             return newSelected;
         }
-
         /// <summary>
         /// 简单的 SelectionGrid 包装器
         /// </summary>

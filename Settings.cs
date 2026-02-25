@@ -137,7 +137,7 @@ namespace BaseMacro
 
             string[] languages = { "中文", "English" };
             int selected = UseChinese ? 0 : 1;
-            int newSelected = UIUtils.M3SelectionGridSimple(selected, languages, 2, GUILayout.Width(200));
+            int newSelected = UIUtils.M3SelectionGrid(selected, languages, 2, GUILayout.Width(200));
             if (newSelected != selected)
             {
                 UseChinese = newSelected == 0;
