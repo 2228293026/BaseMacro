@@ -41,9 +41,6 @@ namespace BaseMacro
         // 预分配的INPUT数组
         private static INPUT[] inputs = new INPUT[32];
 
-        // 对象池 - 复用KeyEvent结构
-        private static readonly Queue<KeyEvent> eventPool = new(16);
-
         // Windows API 常量
         private const uint INPUT_KEYBOARD = 1;
         private const uint KEYEVENTF_KEYDOWN = 0;
