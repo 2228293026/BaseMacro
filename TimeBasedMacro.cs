@@ -311,6 +311,11 @@ namespace BaseMacro
                 {
                     if (i <= lastTriggeredFloor) continue;
 
+                    // 触发点击
+                    if (!Main.Settings.SimulateKeyPress)
+                        controller.Hit(false);
+
+
                     if (releaseOnly)
                     {
                         // 情况1: 只释放按键，不按下新键
@@ -330,10 +335,6 @@ namespace BaseMacro
                     }
                     else
                     {
-                        // 触发点击
-                        if (!Main.Settings.SimulateKeyPress)
-                            controller.Hit(false);
-
                         // 模拟按键
                         if (Main.Settings.SimulateKeyPress && keyCodes.Count > 0)
                         {
