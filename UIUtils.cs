@@ -19,6 +19,8 @@ namespace BaseMacro
         private static GUIStyle? _infoBoxStyle;
         private static GUIStyle? _warningBoxStyle;
         private static GUIStyle? _colorPickerLabelStyle;
+        private static GUIStyle? _selectionGridStyle;
+        private static GUIStyle? _selectionGridElementStyle;
         private static readonly System.Collections.Generic.Dictionary<string, Texture2D> _textureCache = [];
 
         public static GUIStyle CardStyle => _cardStyle ?? throw new InvalidOperationException("UI not initialized");
@@ -26,6 +28,8 @@ namespace BaseMacro
         public static GUIStyle ButtonStyle => _buttonStyle ?? throw new InvalidOperationException("UI not initialized");
         public static GUIStyle LabelStyle => _labelStyle ?? throw new InvalidOperationException("UI not initialized");
         public static GUIStyle TextFieldStyle => _textFieldStyle ?? throw new InvalidOperationException("UI not initialized");
+
+        public static GUIStyle SelectionGridStyle => _selectionGridStyle ?? throw new InvalidOperationException("UI not initialized");
 
         public static void InitializeStyles()
         {
@@ -40,6 +44,7 @@ namespace BaseMacro
             Color onErrorContainer = new(1.0f, 0.7f, 0.7f);
             Color infoContainer = new(0.1f, 0.2f, 0.35f);
             Color onInfoContainer = new(0.7f, 0.85f, 1.0f);
+            Color onSurfaceVariant = new(0.75f, 0.75f, 0.78f);
 
             _cardStyle = new GUIStyle(GUI.skin.box)
             {
@@ -108,6 +113,27 @@ namespace BaseMacro
                 fontSize = 11,
                 alignment = TextAnchor.MiddleCenter,
                 normal = { textColor = onSurface }
+            };
+            _selectionGridStyle = new GUIStyle
+            {
+                fontSize = 12,
+                alignment = TextAnchor.MiddleCenter,
+                margin = new RectOffset(2, 2, 2, 2),
+                padding = new RectOffset(4, 4, 4, 4),
+                normal = { background = GetCachedRoundedTex(64, 64, 4, surfaceContainerHigh), textColor = onSurfaceVariant },
+                hover = { background = GetCachedRoundedTex(64, 64, 4, primary * 0.2f), textColor = Color.white },
+                active = { background = GetCachedRoundedTex(64, 64, 4, primary), textColor = Color.black },
+                onNormal = { background = GetCachedRoundedTex(64, 64, 4, primary), textColor = Color.black },
+                onHover = { background = GetCachedRoundedTex(64, 64, 4, primary), textColor = Color.black },
+                onActive = { background = GetCachedRoundedTex(64, 64, 4, primary), textColor = Color.black }
+            };
+
+            _selectionGridElementStyle = new GUIStyle
+            {
+                fontSize = 12,
+                alignment = TextAnchor.MiddleCenter,
+                margin = new RectOffset(1, 1, 1, 1),
+                padding = new RectOffset(4, 4, 4, 4)
             };
         }
 
@@ -531,6 +557,71 @@ namespace BaseMacro
             GUILayout.EndHorizontal();
 
             return newValue;
+        }
+        /// <summary>
+        /// Material 3 风格的 SelectionGrid
+        /// </summary>
+        public static int M3SelectionGrid(int selected, string[] texts, int xCount, params GUILayoutOption[] options)
+        {
+            int newSelected = selected;
+
+            // 在这里重新定义需要的颜色变量
+            Color primary = new(0.66f, 0.76f, 1.0f);
+            Color surfaceContainerHigh = new(0.17f, 0.17f, 0.19f);
+            Color onSurfaceVariant = new(0.75f, 0.75f, 0.78f);
+
+            // 计算每个按钮的宽度
+            float totalWidth = GUILayoutUtility.GetRect(0, 0, options).width;
+            float buttonWidth = (totalWidth - (xCount - 1) * 2) / xCount;
+
+            GUILayout.BeginHorizontal();
+
+            for (int i = 0; i < texts.Length; i++)
+            {
+                bool isSelected = (i == selected);
+
+                // 为每个按钮创建样式
+                GUIStyle buttonStyle = new GUIStyle(_selectionGridStyle)
+                {
+                    fixedHeight = 28
+                };
+
+                // 设置圆角
+                float radius = 8;
+                bool tl = (i == 0);
+                bool tr = (i == texts.Length - 1);
+                bool bl = (i == 0);
+                bool br = (i == texts.Length - 1);
+
+                if (isSelected)
+                {
+                    buttonStyle.normal.background = GetCachedRoundedTex(64, 64, radius, primary, tl, tr, bl, br);
+                    buttonStyle.normal.textColor = Color.black;
+                }
+                else
+                {
+                    buttonStyle.normal.background = GetCachedRoundedTex(64, 64, radius, surfaceContainerHigh, tl, tr, bl, br);
+                    buttonStyle.normal.textColor = onSurfaceVariant;
+                }
+
+                // 绘制按钮
+                if (GUILayout.Button(texts[i], buttonStyle, GUILayout.Width(buttonWidth)))
+                {
+                    newSelected = i;
+                }
+            }
+
+            GUILayout.EndHorizontal();
+
+            return newSelected;
+        }
+
+        /// <summary>
+        /// 简单的 SelectionGrid 包装器
+        /// </summary>
+        public static int M3SelectionGridSimple(int selected, string[] texts, int xCount, params GUILayoutOption[] options)
+        {
+            return GUILayout.SelectionGrid(selected, texts, xCount, _selectionGridStyle, options);
         }
     }
 }
