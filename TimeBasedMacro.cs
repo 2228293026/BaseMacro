@@ -243,7 +243,6 @@ namespace BaseMacro
         // 优化的键码解析 - 使用预计算映射表
         private static readonly Dictionary<string, byte> KeyNameToCode = new()
         {
-            ["J"] = 0x4A,
             ["SPACE"] = 0x20,
             ["ENTER"] = 0x0D,
             ["A"] = 0x41,
