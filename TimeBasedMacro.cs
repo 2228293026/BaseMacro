@@ -189,12 +189,138 @@ namespace BaseMacro
             }
         }
 
+        // 扩展的键名映射表 - 包含全键盘按键
+        private static readonly Dictionary<string, byte> KeyNameToCode = new()
+        {
+            // 字母键
+            ["A"] = 0x41,
+            ["B"] = 0x42,
+            ["C"] = 0x43,
+            ["D"] = 0x44,
+            ["E"] = 0x45,
+            ["F"] = 0x46,
+            ["G"] = 0x47,
+            ["H"] = 0x48,
+            ["I"] = 0x49,
+            ["J"] = 0x4A,
+            ["K"] = 0x4B,
+            ["L"] = 0x4C,
+            ["M"] = 0x4D,
+            ["N"] = 0x4E,
+            ["O"] = 0x4F,
+            ["P"] = 0x50,
+            ["Q"] = 0x51,
+            ["R"] = 0x52,
+            ["S"] = 0x53,
+            ["T"] = 0x54,
+            ["U"] = 0x55,
+            ["V"] = 0x56,
+            ["W"] = 0x57,
+            ["X"] = 0x58,
+            ["Y"] = 0x59,
+            ["Z"] = 0x5A,
+
+            // 数字键
+            ["0"] = 0x30,
+            ["1"] = 0x31,
+            ["2"] = 0x32,
+            ["3"] = 0x33,
+            ["4"] = 0x34,
+            ["5"] = 0x35,
+            ["6"] = 0x36,
+            ["7"] = 0x37,
+            ["8"] = 0x38,
+            ["9"] = 0x39,
+
+            // 功能键
+            ["F1"] = 0x70,
+            ["F2"] = 0x71,
+            ["F3"] = 0x72,
+            ["F4"] = 0x73,
+            ["F5"] = 0x74,
+            ["F6"] = 0x75,
+            ["F7"] = 0x76,
+            ["F8"] = 0x77,
+            ["F9"] = 0x78,
+            ["F10"] = 0x79,
+            ["F11"] = 0x7A,
+            ["F12"] = 0x7B,
+
+            // 方向键
+            ["LEFT"] = 0x25,
+            ["UP"] = 0x26,
+            ["RIGHT"] = 0x27,
+            ["DOWN"] = 0x28,
+
+            // 控制键 - 添加 Ctrl 键
+            ["CTRL"] = 0x11,           // 通用 Ctrl
+            ["LCTRL"] = 0xA2,          // 左 Ctrl
+            ["RCTRL"] = 0xA3,          // 右 Ctrl
+            ["SHIFT"] = 0x10,          // 通用 Shift
+            ["LSHIFT"] = 0xA0,         // 左 Shift
+            ["RSHIFT"] = 0xA1,         // 右 Shift
+            ["ALT"] = 0x12,            // 通用 Alt
+            ["LALT"] = 0xA4,           // 左 Alt
+            ["RALT"] = 0xA5,           // 右 Alt
+            ["WIN"] = 0x5B,            // Windows 键
+            ["LWIN"] = 0x5B,           // 左 Windows
+            ["RWIN"] = 0x5C,           // 右 Windows
+
+            ["SPACE"] = 0x20,
+            ["ENTER"] = 0x0D,
+            ["ESC"] = 0x1B,
+            ["TAB"] = 0x09,
+            ["BACKSPACE"] = 0x08,
+            ["DELETE"] = 0x2E,
+            ["INSERT"] = 0x2D,
+            ["HOME"] = 0x24,
+            ["END"] = 0x23,
+            ["PAGEUP"] = 0x21,
+            ["PAGEDOWN"] = 0x22,
+
+            // 标点符号
+            ["MINUS"] = 0xBD,        // -
+            ["EQUALS"] = 0xBB,       // =
+            ["LBRACKET"] = 0xDB,     // [
+            ["RBRACKET"] = 0xDD,     // ]
+            ["BACKSLASH"] = 0xDC,    // \
+            ["SEMICOLON"] = 0xBA,    // ;
+            ["QUOTE"] = 0xDE,        // '
+            ["COMMA"] = 0xBC,        // ,
+            ["PERIOD"] = 0xBE,       // .
+            ["SLASH"] = 0xBF,        // /
+
+            // 数字小键盘
+            ["NUMPAD0"] = 0x60,
+            ["NUMPAD1"] = 0x61,
+            ["NUMPAD2"] = 0x62,
+            ["NUMPAD3"] = 0x63,
+            ["NUMPAD4"] = 0x64,
+            ["NUMPAD5"] = 0x65,
+            ["NUMPAD6"] = 0x66,
+            ["NUMPAD7"] = 0x67,
+            ["NUMPAD8"] = 0x68,
+            ["NUMPAD9"] = 0x69,
+            ["MULTIPLY"] = 0x6A,     // *
+            ["ADD"] = 0x6B,          // +
+            ["SUBTRACT"] = 0x6D,     // -
+            ["DECIMAL"] = 0x6E,      // .
+            ["DIVIDE"] = 0x6F,       // /
+
+            // 其他
+            ["CAPSLOCK"] = 0x14,
+            ["NUMLOCK"] = 0x90,
+            ["SCROLLLOCK"] = 0x91,
+            ["PAUSE"] = 0x13,
+            ["PRINTSCREEN"] = 0x2C
+        };
+
+        // 修改 ParseKeyCodes 方法，支持数字和更多键名
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void ParseKeyCodes()
         {
             string keysSetting = Main.Settings.MacroKeys ?? "J";
 
-            // 如果设置没变且已有数据，直接返回
             if (keysSetting == lastKeysSetting && keyCodes.Count > 0)
                 return;
 
@@ -203,55 +329,31 @@ namespace BaseMacro
 
             string[] parts = keysSetting.Split([','], StringSplitOptions.RemoveEmptyEntries);
 
-            // 预计算的键名映射表
-            var keyNameToCode = new Dictionary<string, byte>
-            {
-                ["SPACE"] = 0x20,
-                ["ENTER"] = 0x0D,
-                ["A"] = 0x41,
-                ["B"] = 0x42,
-                ["C"] = 0x43,
-                ["D"] = 0x44,
-                ["E"] = 0x45,
-                ["F"] = 0x46,
-                ["G"] = 0x47,
-                ["H"] = 0x48,
-                ["I"] = 0x49,
-                ["J"] = 0x4A,
-                ["K"] = 0x4B,
-                ["L"] = 0x4C,
-                ["M"] = 0x4D,
-                ["N"] = 0x4E,
-                ["O"] = 0x4F,
-                ["P"] = 0x50,
-                ["Q"] = 0x51,
-                ["R"] = 0x52,
-                ["S"] = 0x53,
-                ["T"] = 0x54,
-                ["U"] = 0x55,
-                ["V"] = 0x56,
-                ["W"] = 0x57,
-                ["X"] = 0x58,
-                ["Y"] = 0x59,
-                ["Z"] = 0x5A
-            };
-
             foreach (string part in parts)
             {
                 string keyName = part.Trim().ToUpperInvariant();
                 if (string.IsNullOrEmpty(keyName)) continue;
 
+                // 处理单个字符（字母或数字）
                 if (keyName.Length == 1)
                 {
                     char c = keyName[0];
+                    // 字母 A-Z
                     if (c >= 'A' && c <= 'Z')
+                    {
+                        keyCodes.Add((byte)c);
+                        continue;
+                    }
+                    // 数字 0-9
+                    if (c >= '0' && c <= '9')
                     {
                         keyCodes.Add((byte)c);
                         continue;
                     }
                 }
 
-                if (keyNameToCode.TryGetValue(keyName, out byte code))
+                // 从映射表查找
+                if (KeyNameToCode.TryGetValue(keyName, out byte code))
                 {
                     keyCodes.Add(code);
                 }
@@ -265,7 +367,6 @@ namespace BaseMacro
                 keyCodes.Add(0x4A); // 默认 J
 
             keyIndex = 0;
-
             Log($"[TimeBasedMacro] 键码解析完成: {string.Join(", ", keyCodes.Select(k => $"0x{k:X2}"))}");
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
