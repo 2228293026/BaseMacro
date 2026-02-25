@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
@@ -10,29 +11,44 @@ namespace BaseMacro
 {
     internal static class TimeBasedMacro
     {
-        private static List<double>? triggerTimes;
+        // 使用数组替代List，减少开销
+        private static double[]? triggerTimes;
         private static int lastTriggeredFloor = -1;
         private static int floorCount;
         private static bool initialized = false;
 
-        // 缓存组件
+        // 缓存组件引用（使用属性减少null检查）
         private static scrLevelMaker? levelMaker;
         private static scrConductor? conductor;
 
-        private static readonly List<byte> keyCodes = [];
+        // 缓存常用属性访问
+        private static List<scrFloor>? cachedFloors;
+
+        // 使用ArrayPool或固定大小数组
+        private static readonly List<byte> keyCodes = new(4); // 预设容量
         private static int keyIndex = 0;
-
         private static byte? pendingKey = null;
-        private static bool isKeyDown = false; // 跟踪按键状态
-
+        private static bool isKeyDown = false;
         private static string lastKeysSetting = "";
 
-        // Windows API - 使用 SendInput 替代 keybd_event
-        [DllImport("user32.dll")]
-        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+        // 扫描码缓存 - 使用固定大小的数组替代Dictionary
+        private static readonly byte[] scanCodeCache = new byte[256]; // 虚拟键码范围0-255
 
-        [DllImport("user32.dll")]
-        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+        // 优化的按键事件队列 - 使用数组+索引替代Queue
+        private static KeyEvent[] pendingKeyEvents = new KeyEvent[32];
+        private static int pendingKeyCount = 0;
+
+        // 预分配的INPUT数组
+        private static INPUT[] inputs = new INPUT[32];
+
+        // 对象池 - 复用KeyEvent结构
+        private static readonly Queue<KeyEvent> eventPool = new(16);
+
+        // Windows API 常量
+        private const uint INPUT_KEYBOARD = 1;
+        private const uint KEYEVENTF_KEYDOWN = 0;
+        private const uint KEYEVENTF_KEYUP = 2;
+        private const double EPSILON = 1e-15;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct INPUT
@@ -78,42 +94,48 @@ namespace BaseMacro
             public ushort wParamH;
         }
 
-        private const uint INPUT_KEYBOARD = 1;
-        private const uint KEYEVENTF_KEYDOWN = 0;
-        private const uint KEYEVENTF_KEYUP = 2;
-
-        // 缓存虚拟键码到扫描码的映射
-        private static readonly Dictionary<byte, ushort> scanCodeCache = new(10);
-
-        // 按键事件队列，用于批量处理
-        private static readonly Queue<KeyEvent> pendingKeyEvents = new(16);
-
-        private static INPUT[] inputs = new INPUT[16]; // 预设最大事件数
-
         private struct KeyEvent
         {
             public byte keyCode;
             public bool isDown;
+
+            // 复用方法
+            public void Reset()
+            {
+                keyCode = 0;
+                isDown = false;
+            }
         }
 
-        // 批量发送按键事件
+        [DllImport("user32.dll")]
+        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [DllImport("user32.dll")]
+        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+        // 优化的批量发送方法
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void FlushKeyEvents()
         {
-            int count = pendingKeyEvents.Count;
-            if (count == 0) return; if (count > inputs.Length)
-                Array.Resize(ref inputs, count);
-            int index = 0;
-            foreach (var evt in pendingKeyEvents)
+            if (pendingKeyCount == 0) return;
+
+            // 确保inputs数组足够大
+            if (pendingKeyCount > inputs.Length)
+                Array.Resize(ref inputs, Math.Max(pendingKeyCount, inputs.Length * 2));
+
+            // 批量构建INPUT结构
+            for (int i = 0; i < pendingKeyCount; i++)
             {
-                // 获取扫描码（缓存结果）
-                if (!scanCodeCache.TryGetValue(evt.keyCode, out ushort scanCode))
+                ref var evt = ref pendingKeyEvents[i];
+                byte scanCode = scanCodeCache[evt.keyCode];
+                if (scanCode == 0)
                 {
-                    scanCode = (ushort)MapVirtualKey(evt.keyCode, 0);
+                    scanCode = (byte)MapVirtualKey(evt.keyCode, 0);
                     scanCodeCache[evt.keyCode] = scanCode;
                 }
 
-                inputs[index].type = INPUT_KEYBOARD;
-                inputs[index].u.ki = new KEYBDINPUT
+                inputs[i].type = INPUT_KEYBOARD;
+                inputs[i].u.ki = new KEYBDINPUT
                 {
                     wVk = evt.keyCode,
                     wScan = scanCode,
@@ -121,27 +143,31 @@ namespace BaseMacro
                     time = 0,
                     dwExtraInfo = IntPtr.Zero
                 };
-                index++;
             }
 
-            if (index > 0)
-            {
-                SendInput((uint)index, inputs, Marshal.SizeOf(typeof(INPUT)));
-            }
+            // 发送所有事件
+            SendInput((uint)pendingKeyCount, inputs, Marshal.SizeOf(typeof(INPUT)));
 
-            pendingKeyEvents.Clear();
+            // 重置计数器
+            pendingKeyCount = 0;
         }
 
-        // 队列化按键事件
+        // 优化的队列化方法 - 使用数组索引避免Queue开销
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void QueueKeyEvent(byte keyCode, bool isDown)
         {
-            pendingKeyEvents.Enqueue(new KeyEvent { keyCode = keyCode, isDown = isDown });
+            if (pendingKeyCount >= pendingKeyEvents.Length)
+                Array.Resize(ref pendingKeyEvents, pendingKeyEvents.Length * 2);
+
+            pendingKeyEvents[pendingKeyCount].keyCode = keyCode;
+            pendingKeyEvents[pendingKeyCount].isDown = isDown;
+            pendingKeyCount++;
         }
 
-        // 更新按键状态（智能去重）
+        // 优化的按键状态更新
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void UpdateKeyState(byte? newKey)
         {
-            // 如果需要释放当前按键
             if (isKeyDown && pendingKey.HasValue)
             {
                 if (!newKey.HasValue || newKey.Value != pendingKey.Value)
@@ -152,7 +178,6 @@ namespace BaseMacro
                 }
             }
 
-            // 如果需要按下新按键
             if (newKey.HasValue && (!isKeyDown || newKey.Value != pendingKey))
             {
                 QueueKeyEvent(newKey.Value, true);
@@ -161,35 +186,47 @@ namespace BaseMacro
             }
         }
 
+        // 优化的初始化方法
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void Initialize()
         {
             levelMaker = scrLevelMaker.instance;
-            if (levelMaker?.listFloors == null || levelMaker.listFloors.Count == 0) return;
+            if (levelMaker?.listFloors == null || levelMaker.listFloors.Count == 0)
+                return;
 
-            floorCount = levelMaker.listFloors.Count;
-            triggerTimes = new List<double>(floorCount);
+            cachedFloors = levelMaker.listFloors;
+            floorCount = cachedFloors.Count;
+
+            // 预分配数组，避免List开销
+            triggerTimes = new double[floorCount];
+
+            // 批量填充触发时间
             for (int i = 0; i < floorCount - 1; i++)
-                triggerTimes.Add(levelMaker.listFloors[i + 1].entryTime);
-            triggerTimes.Add(double.MaxValue);
+            {
+                triggerTimes[i] = cachedFloors[i + 1]?.entryTime ?? double.MaxValue;
+            }
+            triggerTimes[floorCount - 1] = double.MaxValue;
 
             conductor = scrConductor.instance;
             initialized = true;
+
             if (conductor != null)
             {
                 SyncLastTriggeredFloor(conductor.songposition_minusi);
             }
+
             Log($"[TimeBasedMacro] 初始化完成，共 {floorCount} 个触发点");
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Reset()
         {
             lastTriggeredFloor = -1;
             initialized = false;
             triggerTimes = null;
+            cachedFloors = null;
             levelMaker = null;
             conductor = null;
 
-            // 释放可能残留的按键（使用新方法）
             if (isKeyDown && pendingKey.HasValue)
             {
                 UpdateKeyState(null);
@@ -198,12 +235,45 @@ namespace BaseMacro
 
             pendingKey = null;
             isKeyDown = false;
-            pendingKeyEvents.Clear();
+            pendingKeyCount = 0;
 
             Log("[TimeBasedMacro] 状态已重置");
         }
 
-        // 解析按键设置字符串，转换为虚拟键码列表
+        // 优化的键码解析 - 使用预计算映射表
+        private static readonly Dictionary<string, byte> KeyNameToCode = new()
+        {
+            ["J"] = 0x4A,
+            ["SPACE"] = 0x20,
+            ["ENTER"] = 0x0D,
+            ["A"] = 0x41,
+            ["B"] = 0x42,
+            ["C"] = 0x43,
+            ["D"] = 0x44,
+            ["E"] = 0x45,
+            ["F"] = 0x46,
+            ["G"] = 0x47,
+            ["H"] = 0x48,
+            ["I"] = 0x49,
+            ["J"] = 0x4A,
+            ["K"] = 0x4B,
+            ["L"] = 0x4C,
+            ["M"] = 0x4D,
+            ["N"] = 0x4E,
+            ["O"] = 0x4F,
+            ["P"] = 0x50,
+            ["Q"] = 0x51,
+            ["R"] = 0x52,
+            ["S"] = 0x53,
+            ["T"] = 0x54,
+            ["U"] = 0x55,
+            ["V"] = 0x56,
+            ["W"] = 0x57,
+            ["X"] = 0x58,
+            ["Y"] = 0x59,
+            ["Z"] = 0x5A
+        };
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void UpdateKeyCodes()
         {
             string keysSetting = Main.Settings.MacroKeys ?? "J";
@@ -213,13 +283,14 @@ namespace BaseMacro
             lastKeysSetting = keysSetting;
             keyCodes.Clear();
 
+            // 使用ReadOnlySpan优化字符串分割（Unity不支持Span？这里保留传统方式）
             string[] parts = keysSetting.Split([','], StringSplitOptions.RemoveEmptyEntries);
+
             foreach (string part in parts)
             {
-                string keyName = part.Trim().ToUpper();
+                string keyName = part.Trim().ToUpperInvariant(); // 使用ToUpperInvariant略快
                 if (string.IsNullOrEmpty(keyName)) continue;
 
-                // 尝试将键名转换为虚拟键码
                 if (keyName.Length == 1)
                 {
                     char c = keyName[0];
@@ -230,32 +301,32 @@ namespace BaseMacro
                     }
                 }
 
-                switch (keyName)
+                if (KeyNameToCode.TryGetValue(keyName, out byte code))
                 {
-                    case "J": keyCodes.Add(0x4A); break;
-                    case "SPACE": keyCodes.Add(0x20); break;
-                    case "ENTER": keyCodes.Add(0x0D); break;
-                    default:
-                        Debug.LogWarning($"[TimeBasedMacro] 未知键名: {keyName}，已忽略");
-                        break;
+                    keyCodes.Add(code);
+                }
+                else
+                {
+                    Debug.LogWarning($"[TimeBasedMacro] 未知键名: {keyName}，已忽略");
                 }
             }
 
             if (keyCodes.Count == 0)
                 keyCodes.Add(0x4A); // 默认 J
 
-            keyIndex = 0; // 重置索引
+            keyIndex = 0;
         }
+
+        // 优化的Update方法 - 减少方法调用和分支
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Update(scrController controller)
         {
-            if (!Main.Settings.Macro) return;
-            if (controller?.paused != false) return;
-            if (ADOBase.sceneName == GCNS.sceneLevelSelect) return;
+            // 快速失败检查
+            if (!Main.Settings.Macro || controller?.paused != false ||
+                ADOBase.sceneName == GCNS.sceneLevelSelect)
+                return;
 
-            var lm = levelMaker;
-            var cond = conductor;
-            var floors = lm?.listFloors;
-
+            // 延迟初始化
             if (!initialized || NeedReinitialize())
             {
                 Reset();
@@ -263,167 +334,172 @@ namespace BaseMacro
                 if (!initialized) return;
             }
 
-            double currentTime = cond!.songposition_minusi;
-            double nextFrameTime = currentTime + Time.unscaledDeltaTime; // 预测的下一帧时间
+            // 缓存本地引用
+            var cond = conductor;
+            var floors = cachedFloors;
+            var times = triggerTimes;
 
-            // 从上一个触发的地板之后开始检查
+            if (cond == null || floors == null || times == null)
+                return;
+
+            double currentTime = cond.songposition_minusi;
+            double nextFrameTime = currentTime + Time.unscaledDeltaTime;
+            double timeOffsetMs = Main.Settings.TimeOffset * 0.001;
+
             int startFloor = lastTriggeredFloor + 1;
+            bool simulateKeyPress = Main.Settings.SimulateKeyPress;
             bool keyStateChanged = false;
 
             UpdateKeyCodes();
-            int triggerCount = triggerTimes!.Count;
+
+            // 批量处理触发点
+            int triggerCount = times.Length;
             for (int i = startFloor; i < triggerCount; i++)
             {
-                var floor = floors![i];
+                var floor = floors[i];
                 if (floor == null) continue;
 
-                if (floor.nextfloor != null && floor.nextfloor.auto)
+                // 合并快速检查
+                if (floor.nextfloor?.auto == true || floor.midSpin)
                 {
                     lastTriggeredFloor = i;
                     continue;
                 }
-                if (floor.midSpin)
-                {
-                    lastTriggeredFloor = i;
-                    continue;
-                }
 
-                // 判断是否需要只释放按键而不按下新键
-                bool releaseOnly = false;
-
-                // 如果当前地板是长按，且下一个地板不是长按
-                if (Main.Settings.SimulateKeyPress)
-                {
-                    if (floor.holdLength > -1 && i + 1 < triggerCount)
-                    {
-                        var nextFloor = floors[i + 1];
-                        if (nextFloor != null && nextFloor.holdLength == -1)
-                        {
-                            releaseOnly = true;
-                        }
-                    }
-                }
-
-                double triggerTime = triggerTimes[i];
-                double adjustedTrigger = triggerTime + Main.Settings.TimeOffset * 0.001;
-
-                if (adjustedTrigger <= nextFrameTime + 1e-15)
-                {
-                    if (i <= lastTriggeredFloor) continue;
-
-                    // 触发点击
-                    if (!Main.Settings.SimulateKeyPress)
-                        controller.Hit(false);
-
-
-                    if (releaseOnly)
-                    {
-                        // 情况1: 只释放按键，不按下新键
-                        if (Main.Settings.SimulateKeyPress && isKeyDown)
-                        {
-                            UpdateKeyState(null);
-                            keyStateChanged = true;
-                            Log($"[TimeBasedMacro] 地板 {i} 释放所有按键（下一个不是长按）");
-                        }
-
-                        // 跳过下一个地板（将其标记为已处理）
-                        if (i + 1 > lastTriggeredFloor)
-                        {
-                            lastTriggeredFloor = i + 1;
-                            Log($"[TimeBasedMacro] 跳过普通地板 {i + 1}");
-                        }
-                    }
-                    else
-                    {
-                        // 模拟按键
-                        if (Main.Settings.SimulateKeyPress && keyCodes.Count > 0)
-                        {
-                            byte key = keyCodes[keyIndex];
-                            keyIndex = (keyIndex + 1) % keyCodes.Count;
-
-                            UpdateKeyState(key);
-                            keyStateChanged = true;
-                        }
-                    }
-
-                    lastTriggeredFloor = i;
-
-                    Log($"[TimeBasedMacro] 触发地板 {i}，时间 {currentTime:F6}s，理论 {triggerTime:F6}s，偏移 {Main.Settings.TimeOffset}ms，releaseOnly={releaseOnly}");
-                }
-                else
-                {
+                // 预计算触发时间
+                double adjustedTrigger = times[i] + timeOffsetMs;
+                if (adjustedTrigger > nextFrameTime + EPSILON)
                     break;
+
+                if (i <= lastTriggeredFloor)
+                    continue;
+
+                // 处理释放逻辑
+                bool releaseOnly = false;
+                if (simulateKeyPress && floor.holdLength > -1 && i + 1 < triggerCount)
+                {
+                    var nextFloor = floors[i + 1];
+                    if (nextFloor != null && nextFloor.holdLength == -1)
+                    {
+                        releaseOnly = true;
+                    }
                 }
+
+                // 触发点击
+                if (!simulateKeyPress)
+                {
+                    controller.Hit(false);
+                }
+
+                if (releaseOnly)
+                {
+                    if (simulateKeyPress && isKeyDown)
+                    {
+                        UpdateKeyState(null);
+                        keyStateChanged = true;
+                        Log($"[TimeBasedMacro] 地板 {i} 释放所有按键");
+                    }
+
+                    // 跳过下一个地板
+                    if (i + 1 > lastTriggeredFloor)
+                    {
+                        lastTriggeredFloor = i + 1;
+                        Log($"[TimeBasedMacro] 跳过普通地板 {i + 1}");
+                    }
+                }
+                else if (simulateKeyPress && keyCodes.Count > 0)
+                {
+                    byte key = keyCodes[keyIndex];
+                    keyIndex = (keyIndex + 1) % keyCodes.Count;
+                    UpdateKeyState(key);
+                    keyStateChanged = true;
+                }
+
+                lastTriggeredFloor = i;
+                Log($"[TimeBasedMacro] 触发地板 {i}");
             }
 
-            // 每帧只发送一次批量按键事件
-            if (keyStateChanged || pendingKeyEvents.Count > 0)
+            // 批量发送按键事件
+            if (keyStateChanged || pendingKeyCount > 0)
             {
                 FlushKeyEvents();
             }
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool NeedReinitialize()
         {
             var lm = levelMaker ?? scrLevelMaker.instance;
             return lm?.listFloors == null || lm.listFloors.Count != floorCount;
         }
 
+        // 优化的输入处理
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void HandleInput()
         {
             if (!Main.Settings.Macro) return;
 
             bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
 
-            if (ctrl)
+            if (ctrl && Main.Settings.EnableKeyAdjust)
             {
-                // Ctrl + Left/Right 调整 AdjustStep
-                if (Main.Settings.EnableKeyAdjust)
+                // 批量处理方向键输入
+                if (Input.GetKeyDown(KeyCode.LeftArrow))
                 {
-                    if (Input.GetKeyDown(KeyCode.LeftArrow))
-                    {
-                        Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep - 0.1f, 0.1f, 10f);
-                        Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
-                    }
-                    if (Input.GetKeyDown(KeyCode.RightArrow))
-                    {
-                        Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep + 0.1f, 0.1f, 10f);
-                        Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep}");
-                    }
+                    Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep - 0.1f, 0.1f, 10f);
+                    Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep:F1}");
+                }
+                else if (Input.GetKeyDown(KeyCode.RightArrow))
+                {
+                    Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep + 0.1f, 0.1f, 10f);
+                    Log($"[TimeBasedMacro] AdjustStep 调整为 {Main.Settings.AdjustStep:F1}");
                 }
             }
-            else
+            else if (!ctrl && Main.Settings.EnableArrowTimeAdjust)
             {
-                // 无 Ctrl：左右方向键调整 TimeOffset
-                if (Main.Settings.EnableArrowTimeAdjust)
+                if (Input.GetKeyDown(KeyCode.LeftArrow))
                 {
-                    if (Input.GetKeyDown(KeyCode.LeftArrow))
-                    {
-                        Main.Settings.TimeOffset -= Main.Settings.AdjustStep;
-                        Log($"[TimeBasedMacro] 偏移调整为 {Main.Settings.TimeOffset}ms");
-                    }
-                    if (Input.GetKeyDown(KeyCode.RightArrow))
-                    {
-                        Main.Settings.TimeOffset += Main.Settings.AdjustStep;
-                        Log($"[TimeBasedMacro] 偏移调整为 {Main.Settings.TimeOffset}ms");
-                    }
+                    Main.Settings.TimeOffset -= Main.Settings.AdjustStep;
+                    Log($"[TimeBasedMacro] 偏移调整为 {Main.Settings.TimeOffset:F1}ms");
+                }
+                else if (Input.GetKeyDown(KeyCode.RightArrow))
+                {
+                    Main.Settings.TimeOffset += Main.Settings.AdjustStep;
+                    Log($"[TimeBasedMacro] 偏移调整为 {Main.Settings.TimeOffset:F1}ms");
                 }
             }
         }
 
+        // 优化的同步方法 - 使用二分查找
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void SyncLastTriggeredFloor(double currentTime)
         {
-            if (triggerTimes == null || triggerTimes.Count == 0) return;
+            if (triggerTimes == null || triggerTimes.Length == 0)
+                return;
 
-            // 二分查找第一个触发时间 > currentTime 的索引
-            int index = triggerTimes.BinarySearch(currentTime);
-            if (index < 0) index = ~index; // 获取大于 currentTime 的第一个索引
+            int left = 0;
+            int right = triggerTimes.Length - 1;
 
-            // 如果所有触发时间都 <= currentTime，则 index = triggerTimes.Count
-            // 此时 lastTriggeredFloor 应为最后一个索引
-            lastTriggeredFloor = index - 1;
+            while (left <= right)
+            {
+                int mid = (left + right) >> 1; // 位运算优化
+                if (triggerTimes[mid] < currentTime)
+                {
+                    left = mid + 1;
+                }
+                else if (triggerTimes[mid] > currentTime)
+                {
+                    right = mid - 1;
+                }
+                else
+                {
+                    lastTriggeredFloor = mid;
+                    Log($"[TimeBasedMacro] 同步到时间 {currentTime:F6}s，地板 {lastTriggeredFloor}");
+                    return;
+                }
+            }
 
-            Log($"[TimeBasedMacro] 同步到当前时间 {currentTime:F6}s，lastTriggeredFloor = {lastTriggeredFloor}");
+            lastTriggeredFloor = left - 1;
+            Log($"[TimeBasedMacro] 同步到时间 {currentTime:F6}s，地板 {lastTriggeredFloor}");
         }
 
         [System.Diagnostics.Conditional("DEBUG")]
