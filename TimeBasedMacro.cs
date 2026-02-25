@@ -24,9 +24,6 @@ namespace BaseMacro
         // 缓存常用属性访问
         private static List<scrFloor>? cachedFloors;
 
-        // 保存原始的holdBehavior，以便后续恢复
-        private static HoldBehavior? originalHoldBehavior = null;
-
         // 使用ArrayPool或固定大小数组
         private static readonly List<byte> keyCodes = new(4); // 预设容量
         private static int keyIndex = 0;
