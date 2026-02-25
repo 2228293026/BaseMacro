@@ -24,6 +24,9 @@ namespace BaseMacro
         // 缓存常用属性访问
         private static List<scrFloor>? cachedFloors;
 
+        // 保存原始的holdBehavior，以便后续恢复
+        private static HoldBehavior? originalHoldBehavior = null;
+
         // 使用ArrayPool或固定大小数组
         private static readonly List<byte> keyCodes = new(4); // 预设容量
         private static int keyIndex = 0;
@@ -186,6 +189,100 @@ namespace BaseMacro
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ParseKeyCodes()
+        {
+            string keysSetting = Main.Settings.MacroKeys ?? "J";
+
+            // 如果设置没变且已有数据，直接返回
+            if (keysSetting == lastKeysSetting && keyCodes.Count > 0)
+                return;
+
+            lastKeysSetting = keysSetting;
+            keyCodes.Clear();
+
+            string[] parts = keysSetting.Split([','], StringSplitOptions.RemoveEmptyEntries);
+
+            // 预计算的键名映射表
+            var keyNameToCode = new Dictionary<string, byte>
+            {
+                ["SPACE"] = 0x20,
+                ["ENTER"] = 0x0D,
+                ["A"] = 0x41,
+                ["B"] = 0x42,
+                ["C"] = 0x43,
+                ["D"] = 0x44,
+                ["E"] = 0x45,
+                ["F"] = 0x46,
+                ["G"] = 0x47,
+                ["H"] = 0x48,
+                ["I"] = 0x49,
+                ["J"] = 0x4A,
+                ["K"] = 0x4B,
+                ["L"] = 0x4C,
+                ["M"] = 0x4D,
+                ["N"] = 0x4E,
+                ["O"] = 0x4F,
+                ["P"] = 0x50,
+                ["Q"] = 0x51,
+                ["R"] = 0x52,
+                ["S"] = 0x53,
+                ["T"] = 0x54,
+                ["U"] = 0x55,
+                ["V"] = 0x56,
+                ["W"] = 0x57,
+                ["X"] = 0x58,
+                ["Y"] = 0x59,
+                ["Z"] = 0x5A
+            };
+
+            foreach (string part in parts)
+            {
+                string keyName = part.Trim().ToUpperInvariant();
+                if (string.IsNullOrEmpty(keyName)) continue;
+
+                if (keyName.Length == 1)
+                {
+                    char c = keyName[0];
+                    if (c >= 'A' && c <= 'Z')
+                    {
+                        keyCodes.Add((byte)c);
+                        continue;
+                    }
+                }
+
+                if (keyNameToCode.TryGetValue(keyName, out byte code))
+                {
+                    keyCodes.Add(code);
+                }
+                else
+                {
+                    Debug.LogWarning($"[TimeBasedMacro] 未知键名: {keyName}，已忽略");
+                }
+            }
+
+            if (keyCodes.Count == 0)
+                keyCodes.Add(0x4A); // 默认 J
+
+            keyIndex = 0;
+
+            Log($"[TimeBasedMacro] 键码解析完成: {string.Join(", ", keyCodes.Select(k => $"0x{k:X2}"))}");
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ApplyHoldBehavior(scrController controller)
+        {
+            if (controller == null) return;
+
+            if (Main.Settings.Macro)
+            {
+                controller.requireHolding = Persistence.holdBehavior < HoldBehavior.NoHoldNeeded;
+                if (!Main.Settings.SimulateKeyPress)
+                {
+                    controller.requireHolding = false;
+                    Log($"[TimeBasedMacro] 强制设置 requireHolding = false");
+                }
+            }
+        }
         // 优化的初始化方法
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void Initialize()
@@ -208,8 +305,10 @@ namespace BaseMacro
             triggerTimes[floorCount - 1] = double.MaxValue;
 
             conductor = scrConductor.instance;
-            initialized = true;
 
+            // === 在初始化阶段解析键码 ===
+            ParseKeyCodes();
+            initialized = true;
             if (conductor != null)
             {
                 SyncLastTriggeredFloor(conductor.songposition_minusi);
@@ -218,7 +317,7 @@ namespace BaseMacro
             Log($"[TimeBasedMacro] 初始化完成，共 {floorCount} 个触发点");
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void Reset()
+        public static void Reset(scrController controller)
         {
             lastTriggeredFloor = -1;
             initialized = false;
@@ -237,86 +336,11 @@ namespace BaseMacro
             isKeyDown = false;
             pendingKeyCount = 0;
 
+            ApplyHoldBehavior(controller);
+
             Log("[TimeBasedMacro] 状态已重置");
         }
 
-        // 优化的键码解析 - 使用预计算映射表
-        private static readonly Dictionary<string, byte> KeyNameToCode = new()
-        {
-            ["SPACE"] = 0x20,
-            ["ENTER"] = 0x0D,
-            ["A"] = 0x41,
-            ["B"] = 0x42,
-            ["C"] = 0x43,
-            ["D"] = 0x44,
-            ["E"] = 0x45,
-            ["F"] = 0x46,
-            ["G"] = 0x47,
-            ["H"] = 0x48,
-            ["I"] = 0x49,
-            ["J"] = 0x4A,
-            ["K"] = 0x4B,
-            ["L"] = 0x4C,
-            ["M"] = 0x4D,
-            ["N"] = 0x4E,
-            ["O"] = 0x4F,
-            ["P"] = 0x50,
-            ["Q"] = 0x51,
-            ["R"] = 0x52,
-            ["S"] = 0x53,
-            ["T"] = 0x54,
-            ["U"] = 0x55,
-            ["V"] = 0x56,
-            ["W"] = 0x57,
-            ["X"] = 0x58,
-            ["Y"] = 0x59,
-            ["Z"] = 0x5A
-        };
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void UpdateKeyCodes()
-        {
-            string keysSetting = Main.Settings.MacroKeys ?? "J";
-            if (keysSetting == lastKeysSetting && keyCodes.Count > 0)
-                return;
-
-            lastKeysSetting = keysSetting;
-            keyCodes.Clear();
-
-            // 使用ReadOnlySpan优化字符串分割（Unity不支持Span？这里保留传统方式）
-            string[] parts = keysSetting.Split([','], StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (string part in parts)
-            {
-                string keyName = part.Trim().ToUpperInvariant(); // 使用ToUpperInvariant略快
-                if (string.IsNullOrEmpty(keyName)) continue;
-
-                if (keyName.Length == 1)
-                {
-                    char c = keyName[0];
-                    if (c >= 'A' && c <= 'Z')
-                    {
-                        keyCodes.Add((byte)c);
-                        continue;
-                    }
-                }
-
-                if (KeyNameToCode.TryGetValue(keyName, out byte code))
-                {
-                    keyCodes.Add(code);
-                }
-                else
-                {
-                    Debug.LogWarning($"[TimeBasedMacro] 未知键名: {keyName}，已忽略");
-                }
-            }
-
-            if (keyCodes.Count == 0)
-                keyCodes.Add(0x4A); // 默认 J
-
-            keyIndex = 0;
-        }
-
-        // 优化的Update方法 - 减少方法调用和分支
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Update(scrController controller)
         {
@@ -328,7 +352,7 @@ namespace BaseMacro
             // 延迟初始化
             if (!initialized || NeedReinitialize())
             {
-                Reset();
+                Reset(controller);
                 Initialize();
                 if (!initialized) return;
             }
@@ -348,8 +372,6 @@ namespace BaseMacro
             int startFloor = lastTriggeredFloor + 1;
             bool simulateKeyPress = Main.Settings.SimulateKeyPress;
             bool keyStateChanged = false;
-
-            UpdateKeyCodes();
 
             // 批量处理触发点
             int triggerCount = times.Length;
@@ -424,6 +446,7 @@ namespace BaseMacro
                 FlushKeyEvents();
             }
         }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool NeedReinitialize()
         {

@@ -34,21 +34,19 @@ namespace BaseMacro
             {
                 if (_macroKeys == value) return;
                 _macroKeys = value;
-                _keyCache = []; // 清除缓存
             }
         }
 
-        // 缓存解析后的键码
-        private byte[] _keyCache = [];
-        public byte[] GetKeyCodes()
+        private bool _simulateKeyPress = false;
+        public bool SimulateKeyPress
         {
-            if (_keyCache.Length > 0) return _keyCache;
-            _keyCache = ParseKeyCodes(MacroKeys);
-            return _keyCache;
-        }
-
-        public bool SimulateKeyPress = false;
-        public bool EnableKeyAdjust = true;
+            get => _simulateKeyPress;
+            set
+            {
+                if (_simulateKeyPress == value) return;
+                _simulateKeyPress = value;
+            }
+        }        public bool EnableKeyAdjust = true;
         public float AdjustStep = 1f;
         public bool UseFramePrediction = true;
 
@@ -65,60 +63,6 @@ namespace BaseMacro
         private (string input, bool focused) _adjustStepState = (string.Empty, false);
         private (string input, bool focused) _timeOffsetState = (string.Empty, false);
 
-        // 预编译键名映射
-        private static readonly System.Collections.Generic.Dictionary<string, byte> KeyNameToCode = new()
-        {
-            ["A"] = 0x41,
-            ["B"] = 0x42,
-            ["C"] = 0x43,
-            ["D"] = 0x44,
-            ["E"] = 0x45,
-            ["F"] = 0x46,
-            ["G"] = 0x47,
-            ["H"] = 0x48,
-            ["I"] = 0x49,
-            ["J"] = 0x4A,
-            ["K"] = 0x4B,
-            ["L"] = 0x4C,
-            ["M"] = 0x4D,
-            ["N"] = 0x4E,
-            ["O"] = 0x4F,
-            ["P"] = 0x50,
-            ["Q"] = 0x51,
-            ["R"] = 0x52,
-            ["S"] = 0x53,
-            ["T"] = 0x54,
-            ["U"] = 0x55,
-            ["V"] = 0x56,
-            ["W"] = 0x57,
-            ["X"] = 0x58,
-            ["Y"] = 0x59,
-            ["Z"] = 0x5A,
-            ["SPACE"] = 0x20,
-            ["ENTER"] = 0x0D
-        };
-
-        private static byte[] ParseKeyCodes(string keysSetting)
-        {
-            if (string.IsNullOrEmpty(keysSetting)) return new byte[] { 0x4A };
-
-            var parts = keysSetting.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
-            var codes = new System.Collections.Generic.List<byte>(parts.Length);
-
-            foreach (var part in parts)
-            {
-                var keyName = part.Trim().ToUpperInvariant();
-                if (string.IsNullOrEmpty(keyName)) continue;
-
-                if (KeyNameToCode.TryGetValue(keyName, out byte code))
-                {
-                    codes.Add(code);
-                }
-            }
-
-            return codes.Count > 0 ? codes.ToArray() : new byte[] { 0x4A };
-        }
-
         public void OnGUI(UnityModManager.ModEntry modEntry)
         {
             UIUtils.InitializeStyles();
@@ -130,7 +74,11 @@ namespace BaseMacro
             GUILayout.BeginVertical();
             GUILayout.BeginVertical(UIUtils.CardStyle, GUILayout.Width(450));
             bool newMacro = UIUtils.M3Switch(Macro, "Enable Macro | 启用宏");
-            if (newMacro != Macro) Macro = newMacro;
+            if (newMacro != Macro)
+            {
+                Macro = newMacro;
+                ADOBase.controller.Restart();
+            }
             GUILayout.EndVertical();
 
             if (Macro)
@@ -144,7 +92,12 @@ namespace BaseMacro
                 MacroKeys = GUILayout.TextField(MacroKeys, UIUtils.TextFieldStyle);
                 GUILayout.EndHorizontal();
                 GUILayout.Space(2);
-                SimulateKeyPress = UIUtils.M3Switch(SimulateKeyPress, "Input key press (using WinAPI) | 输入按键 (使用Windows API)");
+                bool newSimulateKeyPress = UIUtils.M3Switch(SimulateKeyPress, "Input key press (using WinAPI) | 输入按键 (使用Windows API)");
+                if (newSimulateKeyPress != SimulateKeyPress)
+                {
+                    SimulateKeyPress = newSimulateKeyPress; // 通过属性设置，会触发事件
+                    ADOBase.controller.Restart();
+                }
                 GUILayout.EndVertical();
             }
             GUILayout.EndVertical();
