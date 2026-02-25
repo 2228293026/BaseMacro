@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using UnityEngine;
+using System.Buffers;
 
 #nullable enable
 
@@ -108,16 +109,24 @@ namespace BaseMacro
 
         [DllImport("user32.dll")]
         private static extern uint MapVirtualKey(uint uCode, uint uMapType);
-
-        // 优化的批量发送方法
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void FlushKeyEvents()
         {
             if (pendingKeyCount == 0) return;
 
-            // 确保inputs数组足够大
-            if (pendingKeyCount > inputs.Length)
-                Array.Resize(ref inputs, Math.Max(pendingKeyCount, inputs.Length * 2));
+            // 使用 ArrayPool 租用数组
+            INPUT[] inputsToSend;
+            bool usePool = false;
+
+            if (pendingKeyCount <= inputs.Length)
+            {
+                inputsToSend = inputs;
+            }
+            else
+            {
+                inputsToSend = ArrayPool<INPUT>.Shared.Rent(pendingKeyCount);
+                usePool = true;
+            }
 
             // 批量构建INPUT结构
             for (int i = 0; i < pendingKeyCount; i++)
@@ -130,8 +139,8 @@ namespace BaseMacro
                     scanCodeCache[evt.keyCode] = scanCode;
                 }
 
-                inputs[i].type = INPUT_KEYBOARD;
-                inputs[i].u.ki = new KEYBDINPUT
+                inputsToSend[i].type = INPUT_KEYBOARD;
+                inputsToSend[i].u.ki = new KEYBDINPUT
                 {
                     wVk = evt.keyCode,
                     wScan = scanCode,
@@ -142,7 +151,13 @@ namespace BaseMacro
             }
 
             // 发送所有事件
-            SendInput((uint)pendingKeyCount, inputs, Marshal.SizeOf(typeof(INPUT)));
+            SendInput((uint)pendingKeyCount, inputsToSend, Marshal.SizeOf(typeof(INPUT)));
+
+            // 归还租用的数组
+            if (usePool)
+            {
+                ArrayPool<INPUT>.Shared.Return(inputsToSend);
+            }
 
             // 重置计数器
             pendingKeyCount = 0;
@@ -153,8 +168,13 @@ namespace BaseMacro
         private static void QueueKeyEvent(byte keyCode, bool isDown)
         {
             if (pendingKeyCount >= pendingKeyEvents.Length)
-                Array.Resize(ref pendingKeyEvents, pendingKeyEvents.Length * 2);
+            {
+                var newArray = new KeyEvent[pendingKeyEvents.Length * 2];
+                Array.Copy(pendingKeyEvents, newArray, pendingKeyEvents.Length);
+                pendingKeyEvents = newArray;
+            }
 
+            // 复用已有的 KeyEvent 实例
             pendingKeyEvents[pendingKeyCount].keyCode = keyCode;
             pendingKeyEvents[pendingKeyCount].isDown = isDown;
             pendingKeyCount++;
@@ -415,6 +435,7 @@ namespace BaseMacro
         {
             lastTriggeredFloor = -1;
             initialized = false;
+
             triggerTimes = null;
             cachedFloors = null;
             levelMaker = null;
@@ -425,11 +446,15 @@ namespace BaseMacro
                 UpdateKeyState(null);
                 FlushKeyEvents();
             }
-
             pendingKey = null;
             isKeyDown = false;
-            pendingKeyCount = 0;
+            keyIndex = 0;
 
+            if (pendingKeyCount > 0)
+            {
+                Array.Clear(pendingKeyEvents, 0, pendingKeyCount);
+                pendingKeyCount = 0;
+            }
             ApplyHoldBehavior(controller);
 
             Log("[TimeBasedMacro] 状态已重置");
@@ -438,8 +463,9 @@ namespace BaseMacro
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Update(scrController controller)
         {
+            var settings = Main.Settings;
             // 快速失败检查
-            if (!Main.Settings.Macro || controller?.paused != false ||
+            if (!settings.Macro || controller?.paused != false ||
                 ADOBase.sceneName == GCNS.sceneLevelSelect)
                 return;
 
@@ -460,11 +486,20 @@ namespace BaseMacro
                 return;
 
             double currentTime = cond.songposition_minusi;
-            double nextFrameTime = currentTime + Time.unscaledDeltaTime;
-            double timeOffsetMs = Main.Settings.TimeOffset * 0.001;
+            double pitch = cond.song.pitch; // 获取当前音高
+            double nextFrameTime;
+            if (settings.UseFramePrediction)
+            {
+                nextFrameTime = currentTime + (Time.unscaledDeltaTime * pitch);
+            }
+            else
+            {
+                nextFrameTime = currentTime;
+            }
+            double timeOffsetMs = settings.TimeOffset * 0.001;
 
             int startFloor = lastTriggeredFloor + 1;
-            bool simulateKeyPress = Main.Settings.SimulateKeyPress;
+            bool simulateKeyPress = settings.SimulateKeyPress;
             bool keyStateChanged = false;
 
             // 批量处理触发点

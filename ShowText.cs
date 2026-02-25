@@ -6,7 +6,7 @@ namespace BaseMacro
     public class ShowText : MonoBehaviour
     {
         private bool _showMacroText;
-        private readonly string _cachedText = "Macro is enabled!";
+        private readonly string _cachedText = "<color=green>Macro is enabled!</color>";
         private Rect _rect;
 
         public void Awake()
@@ -41,10 +41,7 @@ namespace BaseMacro
         {
             if (_showMacroText)
             {
-                var originalColor = GUI.color;
-                GUI.color = Color.green;
                 GUI.Label(_rect, _cachedText);
-                GUI.color = originalColor;
             }
         }
     }
