@@ -45,7 +45,6 @@ namespace BaseMacro
         private const uint INPUT_KEYBOARD = 1;
         private const uint KEYEVENTF_KEYDOWN = 0;
         private const uint KEYEVENTF_KEYUP = 2;
-        private const double EPSILON = 1e-15;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct INPUT
@@ -484,7 +483,7 @@ namespace BaseMacro
 
                 // 预计算触发时间
                 double adjustedTrigger = times[i] + timeOffsetMs;
-                if (adjustedTrigger > nextFrameTime + EPSILON)
+                if (adjustedTrigger > nextFrameTime)
                     break;
 
                 if (i <= lastTriggeredFloor)
