@@ -1,4 +1,10 @@
-﻿using BaseMacro.Platform;
+﻿/*
+ * 本文件基于 [AsyncInputOptimize] 的代码修改
+ * 原始项目: [https://github.com/adofaiex/AsyncInputOptimize]
+ * 原始许可证: GPL-3.0
+ * 
+ */
+using BaseMacro.Platform;
 using System;
 using System.Runtime.InteropServices;
 using UnityEngine;
