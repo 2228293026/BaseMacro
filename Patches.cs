@@ -40,13 +40,13 @@ namespace BaseMacro
         public static class __scrConductor
         {
 
-            private static unsafe long Update_1()
+            public static unsafe long Update_1()
             {
                 long l = BaseSelect.GetFileTime();
                 return DateTime.Now.Ticks - DateTime.UtcNow.Ticks + l;
             }
 
-            private static double Update_2()
+            public static double Update_2()
             {
                 return AudioDSPManager.GetDSPTime();
             }
