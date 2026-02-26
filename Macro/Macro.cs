@@ -15,7 +15,7 @@ namespace BaseMacro
     #region TimeBasedMacro
 
     /// <summary>
-    /// 支持 SkyHook
+    /// 支持 SkyHook - 性能优化版
     /// </summary>
     internal static class Macro
     {
@@ -32,20 +32,28 @@ namespace BaseMacro
         private static byte? pendingKey = null;
         private static bool isKeyDown = false;
         private static string lastKeysSetting = "";
+
+        // 扫描码缓存 - 预填充
         private static readonly byte[] scanCodeCache = new byte[256];
 
         // 原始 SendInput 相关
-        private struct KeyEvent { public byte keyCode; public bool isDown; public void Reset() { keyCode = 0; isDown = false; } }
+        private struct KeyEvent
+        {
+            public byte keyCode;
+            public bool isDown;
+            public void Reset() { keyCode = 0; isDown = false; }
+        }
+
         private static KeyEvent[] pendingKeyEvents = new KeyEvent[32];
         private static int pendingKeyCount = 0;
-        private static readonly SkyHookSystem.INPUT[] inputs = new SkyHookSystem.INPUT[32];
 
         private const uint INPUT_KEYBOARD = 1;
         private const uint KEYEVENTF_KEYDOWN = 0;
         private const uint KEYEVENTF_KEYUP = 2;
 
-        [DllImport("user32.dll")]
-        private static extern uint SendInput(uint nInputs, SkyHookSystem.INPUT[] pInputs, int cbSize);
+        // 使用 IntPtr 版本的 SendInput 以获得更好的性能
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint nInputs, IntPtr pInputs, int cbSize);
 
         [DllImport("user32.dll")]
         private static extern uint MapVirtualKey(uint uCode, uint uMapType);
@@ -143,28 +151,29 @@ namespace BaseMacro
             ["PAGEUP"] = 0x21,
             ["PAGEDOWN"] = 0x22
         };
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static Macro()
         {
             usePerfCounter = QueryPerformanceFrequency(out perfFrequency);
+
+            // 预热扫描码缓存
+            for (int i = 0; i < 256; i++)
+            {
+                scanCodeCache[i] = (byte)MapVirtualKey((uint)i, 0);
+            }
         }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static long GetAudioSyncTicks()
         {
             if (Main.Settings.HighPrecisionTime)
             {
-                // 使用 AudioDSPManager 获取音频同步的时间
                 return AudioDSPManager.GetDSPTimeAsFileTime();
             }
-            else
-            {
-                // 使用原来的方法
-                return GetPreciseTicks();
-            }
+            return GetPreciseTicks();
         }
-        /// <summary>
-        /// 获取高精度时间（100ns单位）
-        /// </summary>
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static long GetPreciseTicks()
         {
@@ -175,9 +184,6 @@ namespace BaseMacro
             return DateTime.UtcNow.Ticks;
         }
 
-        /// <summary>
-        /// 解析按键配置
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void ParseKeyCodes()
         {
@@ -210,9 +216,6 @@ namespace BaseMacro
             keyIndex = 0;
         }
 
-        /// <summary>
-        /// 初始化触发点
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void Initialize()
         {
@@ -240,9 +243,6 @@ namespace BaseMacro
             }
         }
 
-        /// <summary>
-        /// 同步当前触发点
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void SyncLastTriggeredFloor(double currentTime)
         {
@@ -259,9 +259,6 @@ namespace BaseMacro
             lastTriggeredFloor = left - 1;
         }
 
-        /// <summary>
-        /// 检查是否需要重新初始化
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool NeedReinitialize()
         {
@@ -269,11 +266,6 @@ namespace BaseMacro
             return lm?.listFloors == null || lm.listFloors.Count != floorCount;
         }
 
-        // ==================== 输入方法 ====================
-
-        /// <summary>
-        /// SendInput 模式：队列事件
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void QueueSendInputEvent(byte keyCode, bool isDown)
         {
@@ -289,8 +281,64 @@ namespace BaseMacro
         }
 
         /// <summary>
-        /// 更新按键状态 - 修复版
+        /// 高性能 SendInput 发送（优化版）
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
+        private static unsafe void FlushSendInputEvents()
+        {
+            if (pendingKeyCount == 0) return;
+
+            int inputSize = sizeof(SkyHookSystem.INPUT); // 使用 sizeof 替代 Marshal.SizeOf
+            int totalSize = inputSize * pendingKeyCount;
+
+            if (pendingKeyCount <= 32)
+            {
+                SkyHookSystem.INPUT* inputsPtr = stackalloc SkyHookSystem.INPUT[pendingKeyCount];
+                var span = new Span<SkyHookSystem.INPUT>(inputsPtr, pendingKeyCount);
+
+                for (int i = 0; i < pendingKeyCount; i++)
+                {
+                    ref var evt = ref pendingKeyEvents[i];
+                    ref var input = ref span[i];
+
+                    input.type = INPUT_KEYBOARD;
+                    input.u.ki.wVk = evt.keyCode;
+                    input.u.ki.wScan = scanCodeCache[evt.keyCode];
+                    input.u.ki.dwFlags = evt.isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
+                }
+
+                SendInput((uint)pendingKeyCount, (IntPtr)inputsPtr, inputSize);
+            }
+            else
+            {
+                IntPtr inputsPtr = Marshal.AllocHGlobal(totalSize);
+                try
+                {
+                    var span = new Span<SkyHookSystem.INPUT>((void*)inputsPtr, pendingKeyCount);
+
+                    for (int i = 0; i < pendingKeyCount; i++)
+                    {
+                        ref var evt = ref pendingKeyEvents[i];
+                        ref var input = ref span[i];
+
+                        input.type = INPUT_KEYBOARD;
+                        input.u.ki.wVk = evt.keyCode;
+                        input.u.ki.wScan = scanCodeCache[evt.keyCode];
+                        input.u.ki.dwFlags = evt.isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
+                    }
+
+                    SendInput((uint)pendingKeyCount, inputsPtr, inputSize);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(inputsPtr);
+                }
+            }
+
+            pendingKeyCount = 0;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void UpdateKeyState(byte? newKey)
         {
@@ -304,20 +352,14 @@ namespace BaseMacro
 
                     if (Main.Settings.SkyHookMode)
                     {
-                        // SkyHook模式：立即发送松开事件
                         long now = GetAudioSyncTicks();
                         long elapsed = now - startTimeTicks;
-                        double elapsedSeconds = elapsed / 10000000.0;
-
-                        Log($"[TimeDebug] UpdateKeyState: 松开按键 0x{pendingKey.Value:X2} 时间戳={elapsedSeconds:F6}s");
-
                         var evt = SkyHookSystem.SkyHookEvent.Create(pendingKey.Value, false, elapsed);
                         AsyncInputManager.EnqueueEvent(evt);
                         Log($"[TimeBasedMacro] SkyHook松开已入队: Key=0x{pendingKey.Value:X2}");
                     }
                     else
                     {
-                        // SendInput模式：加入队列
                         QueueSendInputEvent(pendingKey.Value, false);
                     }
 
@@ -333,93 +375,19 @@ namespace BaseMacro
 
                 if (Main.Settings.SkyHookMode)
                 {
-                    // SkyHook模式：立即发送按下事件
                     long now = GetAudioSyncTicks();
                     long elapsed = now - startTimeTicks;
-                    double elapsedSeconds = elapsed / 10000000.0;
-
-                    Log($"[TimeDebug] UpdateKeyState: 按下按键 0x{newKey.Value:X2} 时间戳={elapsedSeconds:F6}s");
                     var evt = SkyHookSystem.SkyHookEvent.Create(newKey.Value, true, elapsed);
                     AsyncInputManager.EnqueueEvent(evt);
                     Log($"[TimeBasedMacro] SkyHook按下已入队: Key=0x{newKey.Value:X2}");
                 }
                 else
                 {
-                    // SendInput模式：加入队列
                     QueueSendInputEvent(newKey.Value, true);
                 }
 
                 pendingKey = newKey;
                 isKeyDown = true;
-            }
-        }
-
-        /// <summary>
-        /// 发送 SendInput 事件
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void FlushSendInputEvents()
-        {
-            if (pendingKeyCount == 0) return;
-
-            SkyHookSystem.INPUT[] inputsToSend;
-            bool usePool = false;
-
-            if (pendingKeyCount <= inputs.Length)
-            {
-                inputsToSend = inputs;
-            }
-            else
-            {
-                inputsToSend = ArrayPool<SkyHookSystem.INPUT>.Shared.Rent(pendingKeyCount);
-                usePool = true;
-            }
-
-            for (int i = 0; i < pendingKeyCount; i++)
-            {
-                ref var evt = ref pendingKeyEvents[i];
-                byte scanCode = scanCodeCache[evt.keyCode];
-                if (scanCode == 0)
-                {
-                    scanCode = (byte)MapVirtualKey(evt.keyCode, 0);
-                    scanCodeCache[evt.keyCode] = scanCode;
-                }
-
-                inputsToSend[i].type = INPUT_KEYBOARD;
-                inputsToSend[i].u.ki = new SkyHookSystem.KEYBDINPUT
-                {
-                    wVk = evt.keyCode,
-                    wScan = scanCode,
-                    dwFlags = evt.isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP,
-                    time = 0,
-                    dwExtraInfo = IntPtr.Zero
-                };
-            }
-
-            SendInput((uint)pendingKeyCount, inputsToSend, Marshal.SizeOf(typeof(SkyHookSystem.INPUT)));
-
-            if (usePool)
-            {
-                ArrayPool<SkyHookSystem.INPUT>.Shared.Return(inputsToSend);
-            }
-
-            pendingKeyCount = 0;
-        }
-
-        /// <summary>
-        /// 刷新所有事件
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void FlushKeyEvents()
-        {
-            if (Main.Settings.SkyHookMode)
-            {
-                // SkyHook 模式不需要额外操作，事件已单独发送
-                if (pendingKeyCount > 0) pendingKeyCount = 0;
-            }
-            else
-            {
-                FlushSendInputEvents();
             }
         }
 
@@ -439,11 +407,6 @@ namespace BaseMacro
             }
         }
 
-        // ==================== 公共接口 ====================
-
-        /// <summary>
-        /// 重置宏状态
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Reset(scrController controller)
         {
@@ -457,7 +420,10 @@ namespace BaseMacro
             if (isKeyDown && pendingKey.HasValue)
             {
                 UpdateKeyState(null);
-                FlushKeyEvents();
+                if (!Main.Settings.SkyHookMode && pendingKeyCount > 0)
+                {
+                    FlushSendInputEvents();
+                }
             }
             pendingKey = null;
             isKeyDown = false;
@@ -480,26 +446,16 @@ namespace BaseMacro
             ApplyHoldBehavior(controller);
         }
 
-
-        /// <summary>
-        /// 更新宏 - 修复版
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Update(scrController controller)
         {
             var settings = Main.Settings;
 
-            // 检查模式切换
-            if (settings.SkyHookMode != skyHookInitialized)
-            {
-                SwitchMode(settings.SkyHookMode);
-            }
-
+            // 快速失败检查
             if (!settings.Macro || controller?.paused != false ||
                 ADOBase.sceneName == GCNS.sceneLevelSelect)
             {
-                // 如果宏关闭但 SkyHook 还在运行，停止它
-                if (!settings.Macro && skyHookInitialized)
+                if (skyHookInitialized)
                 {
                     AsyncInputManager.Stop();
                     skyHookInitialized = false;
@@ -507,27 +463,45 @@ namespace BaseMacro
                 return;
             }
 
-            if (!initialized || NeedReinitialize())
+            // 模式切换检查
+            if (settings.SkyHookMode != skyHookInitialized)
+            {
+                SwitchMode(settings.SkyHookMode);
+            }
+
+            // 初始化检查
+            if (!initialized)
+            {
+                Initialize();
+                if (!initialized) return;
+            }
+            else if (NeedReinitialize())
             {
                 Reset(controller);
                 Initialize();
                 if (!initialized) return;
             }
 
+            // 缓存局部变量
             var cond = conductor;
             var floors = cachedFloors;
             var times = triggerTimes;
             if (cond == null || floors == null || times == null) return;
 
+            // 预计算常用值
             double currentTime = cond.songposition_minusi;
-            double pitch = cond.song.pitch;
-            double nextFrameTime = currentTime + (Time.unscaledDeltaTime * pitch);
-            double timeOffsetMs = settings.TimeOffset * 0.001;
-
-            int startFloor = lastTriggeredFloor + 1;
+            double nextFrameTime = currentTime + (Time.unscaledDeltaTime * cond.song.pitch);
+            double timeOffset = settings.TimeOffset * 0.001;
             bool simulateKeyPress = settings.SimulateKeyPress;
 
+            int startFloor = lastTriggeredFloor + 1;
             int triggerCount = times.Length;
+
+            // 使用本地数组缓存键码
+            var localKeyCodes = keyCodes;
+            int keyCodeCount = localKeyCodes.Count;
+
+            // 主循环
             for (int i = startFloor; i < triggerCount; i++)
             {
                 var floor = floors[i];
@@ -539,64 +513,50 @@ namespace BaseMacro
                     continue;
                 }
 
-                double adjustedTrigger = times[i] + timeOffsetMs;
-                Log($"[TimeDebug] 地板 {i}: entryTime={times[i]:F6}s, 偏移={timeOffsetMs * 1000:F2}ms, 调整后={adjustedTrigger:F6}s");
-                Log($"[TimeDebug] 当前时间={currentTime:F6}s, 下一帧时间={nextFrameTime:F6}s, 差值={adjustedTrigger - currentTime:F6}s");
+                double adjustedTrigger = times[i] + timeOffset;
+
                 if (adjustedTrigger > nextFrameTime) break;
                 if (i <= lastTriggeredFloor) continue;
 
-                bool releaseOnly = false;
+                // 长按处理
                 if (simulateKeyPress && floor.holdLength > -1 && i + 1 < triggerCount)
                 {
                     var nextFloor = floors[i + 1];
                     if (nextFloor != null && nextFloor.holdLength == -1)
                     {
-                        releaseOnly = true;
-                        Log($"[TimeBasedMacro] 地板 {i}: 长按结束，需要松开按键");
+                        if (isKeyDown && pendingKey.HasValue)
+                        {
+                            UpdateKeyState(null);
+                        }
+                        lastTriggeredFloor = i + 1;
+                        continue;
                     }
                 }
 
-                if (!simulateKeyPress)
+                // 按键触发
+                if (simulateKeyPress && keyCodeCount > 0)
+                {
+                    byte key = localKeyCodes[keyIndex];
+                    UpdateKeyState(key);
+                    keyIndex = (keyIndex + 1) % keyCodeCount;
+                }
+                else if (!simulateKeyPress)
                 {
                     controller.Hit(false);
-                }
-                else if (releaseOnly)
-                {
-                    // 长按结束：只松开，不按下新键
-                    if (isKeyDown && pendingKey.HasValue)
-                    {
-                        Log($"[TimeBasedMacro] 地板 {i}: 松开按键 0x{pendingKey.Value:X2}");
-                        UpdateKeyState(null); // 松开当前按键
-                    }
-                    if (i + 1 > lastTriggeredFloor)
-                    {
-                        lastTriggeredFloor = i + 1;
-                    }
-                }
-                else if (simulateKeyPress && keyCodes.Count > 0)
-                {
-                    byte key = keyCodes[keyIndex];
-                    Log($"[TimeBasedMacro] 地板 {i}: 触发按键 0x{key:X2} (索引 {keyIndex})");
-
-                    // 这里会自动处理：如果之前有按下的键，会先松开再按下新的
-                    UpdateKeyState(key);
-
-                    keyIndex = (keyIndex + 1) % keyCodes.Count;
                 }
 
                 lastTriggeredFloor = i;
             }
 
-            // 发送所有待处理的事件
+            // 使用高性能的 FlushSendInputEvents 发送事件
             if (!settings.SkyHookMode && pendingKeyCount > 0)
             {
                 FlushSendInputEvents();
             }
 
-            // 保险机制：如果宏结束但还有键按着，强制释放
+            // 强制释放检查
             if (isKeyDown && pendingKey.HasValue && lastTriggeredFloor >= triggerCount - 1)
             {
-                Log($"[TimeBasedMacro] 宏结束，强制释放按键 0x{pendingKey.Value:X2}");
                 UpdateKeyState(null);
                 if (!settings.SkyHookMode && pendingKeyCount > 0)
                 {
@@ -604,29 +564,27 @@ namespace BaseMacro
                 }
             }
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void SwitchMode(bool useSkyHook)
         {
-            // 如果已经是目标模式，直接返回
             if (useSkyHook == skyHookInitialized) return;
 
             Log($"[TimeBasedMacro] 切换模式: {(useSkyHook ? "SkyHook" : "SendInput")}");
 
             if (useSkyHook)
             {
-                // 切换到 SkyHook 模式
                 if (!skyHookInitialized)
                 {
                     AsyncInputManager.Start();
                     skyHookInitialized = true;
                 }
-                // 记录开始时间基准
                 startTimeTicks = GetAudioSyncTicks();
                 Main.Settings.SkyHookMode = true;
                 Log("[TimeBasedMacro] 切换到 SkyHook 模式（时间精确模式）");
             }
             else
             {
-                // 切换到 SendInput 模式
                 if (skyHookInitialized)
                 {
                     AsyncInputManager.Stop();
@@ -639,7 +597,6 @@ namespace BaseMacro
             // 清理状态
             if (isKeyDown && pendingKey.HasValue)
             {
-                // 立即松开按键
                 if (useSkyHook)
                 {
                     long now = GetAudioSyncTicks();
@@ -650,17 +607,13 @@ namespace BaseMacro
                 else
                 {
                     QueueSendInputEvent(pendingKey.Value, false);
-                    FlushSendInputEvents();
+                    FlushSendInputEvents(); // 使用高性能版本
                 }
                 isKeyDown = false;
                 pendingKey = null;
             }
         }
 
-
-        /// <summary>
-        /// 处理输入调整
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void HandleInput()
         {
