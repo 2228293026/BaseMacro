@@ -1,4 +1,10 @@
-﻿using System;
+﻿/*
+ * 本文件基于 [Iridium] 的代码修改
+ * 原始项目: [https://github.com/Xbodwf/Iridium]
+ * 原始许可证: 无
+ * 新增更多键控支持
+ */
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
