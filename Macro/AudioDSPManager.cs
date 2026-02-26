@@ -10,6 +10,7 @@
  */
 using BaseMacro.Platform;
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
@@ -35,8 +36,8 @@ namespace BaseMacro
         // 新增：启动标志
         private static bool _isInitialized = false;
         // 新增：误差死区阈值
-        private const double ERROR_DEADZONE = 0.0001; // 0.1ms 以下的误差忽略
-
+        private const double ERROR_DEADZONE = 0.00000001; // 0.00001ms 以下的误差忽略
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static double GetPreciseTime()
         {
             double res;
@@ -55,7 +56,7 @@ namespace BaseMacro
             lastTime = l;
             return res;
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void Update()
         {
             // 首次运行：直接同步到真实dspTime
@@ -127,7 +128,7 @@ namespace BaseMacro
                 dspDeltaTimeCount = 0;
             }
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double GetDSPTime()
         {
             if (!_isInitialized)
@@ -138,13 +139,13 @@ namespace BaseMacro
             long l = BaseSelect.GetFileTime();
             return dspTime + (l - lastTime) / SEC_2_TICK;
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long GetDSPTimeAsFileTime()
         {
             double time = GetDSPTime();
             return (long)(time * SEC_2_TICK);
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Reset()
         {
             _isInitialized = false;
