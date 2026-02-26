@@ -46,6 +46,11 @@ namespace BaseMacro
             _showMacroText = newValue;
         }
 
+        public void Update()
+        {
+            // 每帧更新 AudioDSPManager
+            AudioDSPManager.Update();
+        }
         public void OnGUI()
         {
             if (_showMacroText)

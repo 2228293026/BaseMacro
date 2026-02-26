@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityModManagerNet;
+using static UnityModManagerNet.UnityModManager;
 
 #nullable enable
 
@@ -57,6 +58,7 @@ namespace BaseMacro
             }
             return true;
         }
+
         [DllImport("user32.dll")]
         private static extern bool SetWindowText(IntPtr hWnd, string lpString);
 

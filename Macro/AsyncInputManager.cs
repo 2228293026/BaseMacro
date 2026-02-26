@@ -13,6 +13,55 @@ using static BaseMacro.SkyHookSystem;
 namespace BaseMacro
 {
     /// <summary>
+    /// 跨平台高精度时间获取（使用委托，不需要 unsafe）
+    /// </summary>
+    public static class HighPrecisionTime
+    {
+
+        // 使用普通委托代替函数指针
+        public static Func<long> GetTime;
+
+        static HighPrecisionTime()
+        {
+            if (UnityEngine.Application.platform is UnityEngine.RuntimePlatform.WindowsPlayer
+                or UnityEngine.RuntimePlatform.WindowsServer
+                or UnityEngine.RuntimePlatform.WindowsEditor)
+            {
+                GetTime = GetWindowsTime;
+            }
+            else if (UnityEngine.Application.platform is UnityEngine.RuntimePlatform.LinuxPlayer
+                     or UnityEngine.RuntimePlatform.LinuxServer
+                     or UnityEngine.RuntimePlatform.LinuxEditor)
+            {
+                GetTime = GetLinuxTime;
+            }
+            else
+            {
+                GetTime = GetFallbackTime;
+            }
+        }
+
+        private static long GetWindowsTime()
+        {
+            return Platform.Windows.GetFileTime();
+        }
+
+        private static long GetLinuxTime()
+        {
+            return Platform.Linux.GetFileTime();
+        }
+
+        private static long GetFallbackTime()
+        {
+            return DateTime.UtcNow.Ticks;
+        }
+
+        /// <summary>
+        /// 获取高精度时间（100ns 单位）
+        /// </summary>
+        public static long NowTicks => GetTime();
+    }
+    /// <summary>
     /// 异步输入管理器（完全模拟 AsyncInputManager）
     /// </summary>
     public class AsyncInputManager
@@ -205,10 +254,12 @@ namespace BaseMacro
             {
                 bool isDown = evt.Type == EventType.KeyPressed;
 
+                // 使用高精度时间
+                long currentTime = HighPrecisionTime.NowTicks;
+
                 // 获取扫描码
                 ushort scanCode = (ushort)MapVirtualKey(evt.Key, 0);
 
-                // 使用 KEYEVENTF_SCANCODE 标志，让输入更底层
                 const uint KEYEVENTF_SCANCODE = 0x0008;
 
                 INPUT input = new()
@@ -218,7 +269,7 @@ namespace BaseMacro
                     {
                         ki = new KEYBDINPUT
                         {
-                            wVk = 0,  // 虚拟键码设为0，使用扫描码
+                            wVk = 0,
                             wScan = scanCode,
                             dwFlags = (isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP) | KEYEVENTF_SCANCODE,
                             time = 0,

@@ -83,7 +83,16 @@ namespace BaseMacro
             }
         }
 
-
+        private bool _highPrecisionTime = false;
+        public bool HighPrecisionTime
+        {
+            get => _highPrecisionTime;
+            set
+            {
+                if (_highPrecisionTime == value) return;
+                _highPrecisionTime = value;
+            }
+        }
         // 使用ValueTuple减少GC
         private (string input, bool focused) _adjustStepState = (string.Empty, false);
         private (string input, bool focused) _timeOffsetState = (string.Empty, false);
@@ -125,7 +134,7 @@ namespace BaseMacro
                 // 如果 Macro 未开启，显示一个提示卡片
                 GUILayout.BeginVertical(UIUtils.CardStyle);
                 GUILayout.Label(UseChinese ? "请先启用宏" : "Please enable Macro first",
-                    UIUtils.LabelStyle, GUILayout.Height(100));
+                    UIUtils.LabelStyle);
                 GUILayout.EndVertical();
             }
 
@@ -198,6 +207,9 @@ namespace BaseMacro
             GUILayout.Space(2);
             string arrowText = UseChinese ? "允许左右键调整延迟(游戏中)" : "Allow adjustment of delay using left and right keys (in-game)";
             EnableArrowTimeAdjust = UIUtils.M3Switch(EnableArrowTimeAdjust, arrowText);
+            GUILayout.Space(2);
+            string highPrecisionText = UseChinese ? "[实验性]启用高精度时间（提高同步精度）" : "[Experimental]Enable High Precision Time (improves sync accuracy)";
+            HighPrecisionTime = UIUtils.M3Switch(HighPrecisionTime, highPrecisionText);
             GUILayout.EndVertical();
         }
 
@@ -240,15 +252,14 @@ namespace BaseMacro
             authorStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 0.8f);
             authorStyle.richText = true;
             authorStyle.alignment = TextAnchor.MiddleLeft;
-            authorStyle.fontSize = 11; // 稍微小一点的字体
 
             // 作者信息横排 - 紧凑版
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"<color=#AAAAAA>👤</color> HitMargin", authorStyle);
+            GUILayout.Label($"👤 {Main.Mod.Info.Author}", authorStyle);
             GUILayout.FlexibleSpace();
-            GUILayout.Label($"<color=#AAAAAA>📦</color> 1.0.7", authorStyle);
+            GUILayout.Label($"📦 {Main.Mod.Info.Version}", authorStyle);
             GUILayout.FlexibleSpace();
-            GUILayout.Label($"<color=#AAAAAA>📧</color> {(UseChinese ? "hitmargin@qq.com" : "hitmargin@Outlock.com")}", authorStyle);
+            GUILayout.Label($"📧 {(UseChinese ? "hitmargin@qq.com" : "hitmargin@Outlock.com")}", authorStyle);
             GUILayout.EndHorizontal();
 
             GUILayout.Space(4);
@@ -256,13 +267,13 @@ namespace BaseMacro
             // 分隔线
             Color originalColor = GUI.color;
             GUI.color = new Color(0.5f, 0.5f, 0.5f, 0.3f);
-            GUILayout.Box("", GUILayout.Height(1), GUILayout.ExpandWidth(true));
+            GUILayout.Box("", GUILayout.Height(10), GUILayout.ExpandWidth(true));
             GUI.color = originalColor;
 
             GUILayout.Space(4);
 
             // 感谢语 - 使用更淡的颜色
-            GUIStyle thanksStyle = new GUIStyle(UIUtils.LabelStyle);
+            GUIStyle thanksStyle = new(UIUtils.LabelStyle);
             thanksStyle.normal.textColor = new Color(0.7f, 0.7f, 0.7f, 0.4f);
             thanksStyle.fontSize = 9;
             thanksStyle.alignment = TextAnchor.MiddleCenter;

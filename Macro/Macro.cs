@@ -148,7 +148,20 @@ namespace BaseMacro
         {
             usePerfCounter = QueryPerformanceFrequency(out perfFrequency);
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static long GetAudioSyncTicks()
+        {
+            if (Main.Settings.HighPrecisionTime)
+            {
+                // 使用 AudioDSPManager 获取音频同步的时间
+                return AudioDSPManager.GetDSPTimeAsFileTime();
+            }
+            else
+            {
+                // 使用原来的方法
+                return GetPreciseTicks();
+            }
+        }
         /// <summary>
         /// 获取高精度时间（100ns单位）
         /// </summary>
@@ -292,7 +305,7 @@ namespace BaseMacro
                     if (Main.Settings.SkyHookMode)
                     {
                         // SkyHook模式：立即发送松开事件
-                        long now = GetPreciseTicks();
+                        long now = GetAudioSyncTicks();
                         long elapsed = now - startTimeTicks;
                         var evt = SkyHookSystem.SkyHookEvent.Create(pendingKey.Value, false, elapsed);
                         AsyncInputManager.EnqueueEvent(evt);
@@ -317,7 +330,7 @@ namespace BaseMacro
                 if (Main.Settings.SkyHookMode)
                 {
                     // SkyHook模式：立即发送按下事件
-                    long now = GetPreciseTicks();
+                    long now = GetAudioSyncTicks();
                     long elapsed = now - startTimeTicks;
                     var evt = SkyHookSystem.SkyHookEvent.Create(newKey.Value, true, elapsed);
                     AsyncInputManager.EnqueueEvent(evt);
@@ -451,7 +464,7 @@ namespace BaseMacro
 
             if (Main.Settings.SkyHookMode)
             {
-                startTimeTicks = GetPreciseTicks();
+                startTimeTicks = GetAudioSyncTicks();
             }
             ApplyHoldBehavior(controller);
         }
@@ -594,7 +607,7 @@ namespace BaseMacro
                     skyHookInitialized = true;
                 }
                 // 记录开始时间基准
-                startTimeTicks = GetPreciseTicks();
+                startTimeTicks = GetAudioSyncTicks();
                 Main.Settings.SkyHookMode = true;
                 Log("[TimeBasedMacro] 切换到 SkyHook 模式（时间精确模式）");
             }
@@ -616,7 +629,7 @@ namespace BaseMacro
                 // 立即松开按键
                 if (useSkyHook)
                 {
-                    long now = GetPreciseTicks();
+                    long now = GetAudioSyncTicks();
                     long elapsed = now - startTimeTicks;
                     var evt = SkyHookSystem.SkyHookEvent.Create(pendingKey.Value, false, elapsed);
                     AsyncInputManager.EnqueueEvent(evt);

@@ -10,6 +10,7 @@
     <RootNamespace>BaseMacro</RootNamespace>
     <AssemblyName>BaseMacro</AssemblyName>
     <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
@@ -22,6 +23,7 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
@@ -30,6 +32,7 @@
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="0Harmony">
@@ -132,7 +135,11 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AudioDSPManager.cs" />
     <Compile Include="Macro\AsyncInputManager.cs" />
+    <Compile Include="Platform\BaseSelect.cs" />
+    <Compile Include="Platform\Linux.cs" />
+    <Compile Include="Platform\Windows.cs" />
     <Compile Include="ShowText.cs" />
     <Compile Include="Main.cs" />
     <Compile Include="Patches.cs" />
