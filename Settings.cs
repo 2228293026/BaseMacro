@@ -57,9 +57,9 @@ namespace BaseMacro
                 if (_simulateKeyPress == value) return;
                 _simulateKeyPress = value;
             }
-        }        public bool EnableKeyAdjust = true;
+        }
+        public bool EnableKeyAdjust = true;
         public float AdjustStep = 1f;
-        public bool UseFramePrediction = true;
 
         private float _timeOffset;
         public float TimeOffset
@@ -69,6 +69,20 @@ namespace BaseMacro
         }
 
         public bool EnableArrowTimeAdjust = true;
+
+        private bool _skyHookMode = false;
+        public bool SkyHookMode
+        {
+            get => _skyHookMode;
+            set
+            {
+                if (_skyHookMode == value) return;
+                _skyHookMode = value;
+                // 可以在这里添加模式切换的即时处理
+                // OnSkyHookModeChanged?.Invoke(value);
+            }
+        }
+
 
         // 使用ValueTuple减少GC
         private (string input, bool focused) _adjustStepState = (string.Empty, false);
@@ -167,30 +181,23 @@ namespace BaseMacro
             GUILayout.Label(UseChinese ? "延迟设置" : "Offset Settings", UIUtils.HeaderStyle);
             GUILayout.Space(2);
 
-            string adjustText = UseChinese ? "允许Ctrl+方向键调整步长偏移(游戏中)" : "Allow adjusting step offset using Ctrl and arrow keys (in-game)";
+            string adjustText = UseChinese ? "允许Ctrl+左右键调整步长偏移(游戏中)" : "Allow adjusting step offset using Ctrl and arrow keys (in-game)";
             EnableKeyAdjust = UIUtils.M3Switch(EnableKeyAdjust, adjustText);
             GUILayout.Space(2);
-
-            GUILayout.Label(UseChinese ? "调整步长" : "Adjust Step", UIUtils.LabelStyle);
             GUILayout.BeginHorizontal();
-            AdjustStep = UIUtils.M3HorizontalSliderWithLabelAndInput("AdjustStep", AdjustStep, 0.1f, 10f,
+            AdjustStep = UIUtils.M3HorizontalSliderWithLabelAndInput(UseChinese ? "调整步长" : "Adjust Step", AdjustStep, 0.1f, 10f,
                 ref _adjustStepState.input, ref _adjustStepState.focused, "F2", 120, 240, 60);
             GUILayout.EndHorizontal();
 
             GUILayout.Space(2);
-            GUILayout.Label(UseChinese ? "延迟 (ms)" : "Offset (ms)", UIUtils.LabelStyle);
             GUILayout.BeginHorizontal();
-            TimeOffset = UIUtils.M3HorizontalSliderWithLabelAndInput("TimeOffset", TimeOffset, -100f, 100f,
+            TimeOffset = UIUtils.M3HorizontalSliderWithLabelAndInput(UseChinese ? "延迟 (ms)" : "Offset (ms)", TimeOffset, -100f, 100f,
                 ref _timeOffsetState.input, ref _timeOffsetState.focused, "F2", 120, 240, 60);
             GUILayout.EndHorizontal();
 
             GUILayout.Space(2);
             string arrowText = UseChinese ? "允许左右键调整延迟(游戏中)" : "Allow adjustment of delay using left and right keys (in-game)";
             EnableArrowTimeAdjust = UIUtils.M3Switch(EnableArrowTimeAdjust, arrowText);
-
-            GUILayout.Space(2);
-            string frameText = UseChinese ? "使用帧预测（提高精度）" : "Use Frame Prediction (improves accuracy)";
-            UseFramePrediction = UIUtils.M3Switch(UseFramePrediction, frameText);
             GUILayout.EndVertical();
         }
 
@@ -207,13 +214,21 @@ namespace BaseMacro
             GUILayout.EndHorizontal();
 
             GUILayout.Space(2);
-            string simulateText = UseChinese ? "输入按键 (使用Windows API)" : "Input key press (using WinAPI)";
+            string simulateText = UseChinese ? "按键模拟" : "Key simulation";
             bool newSimulateKeyPress = UIUtils.M3Switch(SimulateKeyPress, simulateText);
             if (newSimulateKeyPress != SimulateKeyPress)
             {
                 SimulateKeyPress = newSimulateKeyPress;
                 ADOBase.controller.Restart();
             }
+
+            if (SimulateKeyPress)
+            {
+                GUILayout.Space(2);
+                string skyHook = UseChinese ? "使用SkyHook输入(关闭则使用Win API)" : "Use SkyHook(If closed, use Win API)";
+                SkyHookMode = UIUtils.M3Switch(SkyHookMode, skyHook);
+            }
+
             GUILayout.EndVertical();
         }
         private void DrawAuthorCard()

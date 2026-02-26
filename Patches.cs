@@ -15,8 +15,8 @@ namespace BaseMacro
             [HarmonyPostfix]
             public static void Postfix(scrController __instance)
             {
-                TimeBasedMacro.Update(__instance);
-                TimeBasedMacro.HandleInput();
+                Macro.Update(__instance);
+                Macro.HandleInput();
             }
         }
 
@@ -24,14 +24,14 @@ namespace BaseMacro
         public static class Patch_Awake_Rewind
         {
             [HarmonyPostfix]
-            public static void Postfix(scrController __instance) => TimeBasedMacro.Reset(__instance);
+            public static void Postfix(scrController __instance) => Macro.Reset(__instance);
         }
 
         [HarmonyPatch(typeof(scrController), nameof(scrController.Restart))]
         public static class Patch_Restart
         {
             [HarmonyPrefix]
-            public static void Prefix(scrController __instance) => TimeBasedMacro.Reset(__instance);
+            public static void Prefix(scrController __instance) => Macro.Reset(__instance);
         }
     }
 }

@@ -132,16 +132,19 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Macro\AsyncInputManager.cs" />
     <Compile Include="ShowText.cs" />
     <Compile Include="Main.cs" />
     <Compile Include="Patches.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Settings.cs" />
-    <Compile Include="TimeBasedMacro.cs" />
+    <Compile Include="Macro\SkyHookSystem.cs" />
+    <Compile Include="Macro\Macro.cs" />
     <Compile Include="UIUtils.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
+  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
