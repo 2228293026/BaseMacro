@@ -66,7 +66,7 @@ namespace BaseMacro
             }
         }
 
-        void OnDestroy()
+        public void OnDestroy()
         {
             // 清理样式
             if (_textStyle != null)
