@@ -13,7 +13,7 @@ namespace BaseMacro
     /// <summary>
     /// 异步输入管理器（完全模拟 AsyncInputManager）
     /// </summary>
-    public class AsyncInputManagerUtils
+    public class AsyncInputManager
     {
         // 常量定义
         private const uint INPUT_KEYBOARD = 1;
