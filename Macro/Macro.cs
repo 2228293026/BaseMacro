@@ -473,6 +473,10 @@ namespace BaseMacro
             {
                 startTimeTicks = GetAudioSyncTicks();
             }
+            if (Main.Settings.HighPrecisionTime)
+            {
+                AudioDSPManager.Reset();
+            }
             ApplyHoldBehavior(controller);
         }
 
