@@ -135,7 +135,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="AudioDSPManager.cs" />
+    <Compile Include="Macro\AudioDSPManager.cs" />
     <Compile Include="Macro\AsyncInputManager.cs" />
     <Compile Include="Platform\BaseSelect.cs" />
     <Compile Include="Platform\Linux.cs" />
