@@ -168,9 +168,6 @@ namespace BaseMacro
                     // 批量处理事件
                     if (batchProcessed > 0)
                     {
-                        // 预处理：合并相同按键的连续事件
-                        batchProcessed = MergeEvents(batchEvents, batchProcessed);
-
                         // 发送事件
                         for (int i = 0; i < batchProcessed; i++)
                         {
@@ -211,50 +208,6 @@ namespace BaseMacro
             }
 
             Macro.Log("[SkyHook] 处理线程结束");
-        }
-
-        /// <summary>
-        /// 合并相同按键的连续事件（减少SendInput调用）
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int MergeEvents(SkyHookEvent[] events, int count)
-        {
-            if (count < 2) return count;
-
-            List<SkyHookEvent> result = new(count)
-            {
-                events[0]
-            };
-
-            for (int i = 1; i < count; i++)
-            {
-                SkyHookEvent last = result[result.Count - 1];
-                SkyHookEvent current = events[i];
-
-                // 如果是同一个按键的相反操作，且时间差小于1ms
-                if (last.Key == current.Key &&
-                    last.Type != current.Type)
-                {
-                    long timeDiff = Math.Abs(current.TimeSec * 1000000000L + current.TimeSubsecNano -
-                                            (last.TimeSec * 1000000000L + last.TimeSubsecNano));
-
-                    if (timeDiff < 1000000) // 1ms
-                    {
-                        // 合并：移除上一个（相当于不添加当前）
-                        result.RemoveAt(result.Count - 1);
-                        continue;
-                    }
-                }
-
-                result.Add(current);
-            }
-
-            // 复制回原数组
-            for (int i = 0; i < result.Count; i++)
-            {
-                events[i] = result[i];
-            }
-            return result.Count;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
