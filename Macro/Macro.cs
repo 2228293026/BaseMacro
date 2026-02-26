@@ -307,6 +307,10 @@ namespace BaseMacro
                         // SkyHook模式：立即发送松开事件
                         long now = GetAudioSyncTicks();
                         long elapsed = now - startTimeTicks;
+                        double elapsedSeconds = elapsed / 10000000.0;
+
+                        Log($"[TimeDebug] UpdateKeyState: 松开按键 0x{pendingKey.Value:X2} 时间戳={elapsedSeconds:F6}s");
+
                         var evt = SkyHookSystem.SkyHookEvent.Create(pendingKey.Value, false, elapsed);
                         AsyncInputManager.EnqueueEvent(evt);
                         Log($"[TimeBasedMacro] SkyHook松开已入队: Key=0x{pendingKey.Value:X2}");
@@ -332,6 +336,9 @@ namespace BaseMacro
                     // SkyHook模式：立即发送按下事件
                     long now = GetAudioSyncTicks();
                     long elapsed = now - startTimeTicks;
+                    double elapsedSeconds = elapsed / 10000000.0;
+
+                    Log($"[TimeDebug] UpdateKeyState: 按下按键 0x{newKey.Value:X2} 时间戳={elapsedSeconds:F6}s");
                     var evt = SkyHookSystem.SkyHookEvent.Create(newKey.Value, true, elapsed);
                     AsyncInputManager.EnqueueEvent(evt);
                     Log($"[TimeBasedMacro] SkyHook按下已入队: Key=0x{newKey.Value:X2}");
@@ -529,6 +536,8 @@ namespace BaseMacro
                 }
 
                 double adjustedTrigger = times[i] + timeOffsetMs;
+                Log($"[TimeDebug] 地板 {i}: entryTime={times[i]:F6}s, 偏移={timeOffsetMs * 1000:F2}ms, 调整后={adjustedTrigger:F6}s");
+                Log($"[TimeDebug] 当前时间={currentTime:F6}s, 下一帧时间={nextFrameTime:F6}s, 差值={adjustedTrigger - currentTime:F6}s");
                 if (adjustedTrigger > nextFrameTime) break;
                 if (i <= lastTriggeredFloor) continue;
 
