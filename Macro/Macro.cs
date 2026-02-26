@@ -483,9 +483,6 @@ namespace BaseMacro
                 return;
             }
 
-            bool newM = settings.Macro;
-            bool newS = settings.SimulateKeyPress;
-
             if (!initialized || NeedReinitialize())
             {
                 Reset(controller);

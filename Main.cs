@@ -2,8 +2,10 @@
 using SA.GoogleDoc;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -43,16 +45,62 @@ namespace BaseMacro
                     _uiObject = new GameObject("MacroText");
                     _uiObject.AddComponent<ShowText>();
                     UnityEngine.Object.DontDestroyOnLoad(_uiObject);
+                    TrySetWindowTitle($"{modEntry.Info.DisplayName}, {modEntry.Info.Version}, {modEntry.Info.Author}");
                 }
             }
             else
             {
                 IsEnabled = false;
                 Harmony?.UnpatchAll();
+                TrySetWindowTitle(null);
+
             }
             return true;
         }
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowText(IntPtr hWnd, string lpString);
 
-            public static bool IsEnabled { get; internal set; }
+        private static void TrySetWindowTitle(string? title)
+        {
+            try
+            {
+                // 获取当前进程
+                Process currentProcess = Process.GetCurrentProcess();
+
+                // 等待主窗口句柄可用
+                for (int i = 0; i < 10 && currentProcess.MainWindowHandle == IntPtr.Zero; i++)
+                {
+                    currentProcess.Refresh();
+                    System.Threading.Thread.Sleep(100);
+                }
+
+                IntPtr hwnd = currentProcess.MainWindowHandle;
+
+                if (hwnd != IntPtr.Zero)
+                {
+                    string newTitle = $"A Dance of Fire and Ice";
+                    if (title != null)
+                        newTitle = $"A Dance of Fire and Ice - {title}";
+
+                    if (SetWindowText(hwnd, newTitle))
+                    {
+                        Mod?.Logger.Log($"成功设置窗口标题: {newTitle}");
+                    }
+                    else
+                    {
+                        Mod?.Logger.Log("设置窗口标题失败");
+                    }
+                }
+                else
+                {
+                    Mod?.Logger.Log("未获取到主窗口句柄");
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod?.Logger.Log($"设置窗口标题异常: {ex.Message}");
+            }
+        }
+        public static bool IsEnabled { get; internal set; }
     }
 }
