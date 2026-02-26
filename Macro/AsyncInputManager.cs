@@ -1,4 +1,5 @@
-﻿using System;
+﻿using BaseMacro.Platform;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -12,55 +13,6 @@ using static BaseMacro.SkyHookSystem;
 
 namespace BaseMacro
 {
-    /// <summary>
-    /// 跨平台高精度时间获取（使用委托，不需要 unsafe）
-    /// </summary>
-    public static class HighPrecisionTime
-    {
-
-        // 使用普通委托代替函数指针
-        public static Func<long> GetTime;
-
-        static HighPrecisionTime()
-        {
-            if (UnityEngine.Application.platform is UnityEngine.RuntimePlatform.WindowsPlayer
-                or UnityEngine.RuntimePlatform.WindowsServer
-                or UnityEngine.RuntimePlatform.WindowsEditor)
-            {
-                GetTime = GetWindowsTime;
-            }
-            else if (UnityEngine.Application.platform is UnityEngine.RuntimePlatform.LinuxPlayer
-                     or UnityEngine.RuntimePlatform.LinuxServer
-                     or UnityEngine.RuntimePlatform.LinuxEditor)
-            {
-                GetTime = GetLinuxTime;
-            }
-            else
-            {
-                GetTime = GetFallbackTime;
-            }
-        }
-
-        private static long GetWindowsTime()
-        {
-            return Platform.Windows.GetFileTime();
-        }
-
-        private static long GetLinuxTime()
-        {
-            return Platform.Linux.GetFileTime();
-        }
-
-        private static long GetFallbackTime()
-        {
-            return DateTime.UtcNow.Ticks;
-        }
-
-        /// <summary>
-        /// 获取高精度时间（100ns 单位）
-        /// </summary>
-        public static long NowTicks => GetTime();
-    }
     /// <summary>
     /// 异步输入管理器（完全模拟 AsyncInputManager）
     /// </summary>
@@ -248,14 +200,14 @@ namespace BaseMacro
             Macro.Log("[SkyHook] 处理线程结束");
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void SendInputFromSkyHook(SkyHookEvent evt)
+        private unsafe static void SendInputFromSkyHook(SkyHookEvent evt)
         {
             try
             {
                 bool isDown = evt.Type == EventType.KeyPressed;
 
                 // 使用高精度时间
-                long currentTime = HighPrecisionTime.NowTicks;
+                long currentTime = (long)BaseSelect.GetFileTime;
 
                 // 获取扫描码
                 ushort scanCode = (ushort)MapVirtualKey(evt.Key, 0);
