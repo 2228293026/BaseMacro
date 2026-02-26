@@ -497,10 +497,6 @@ namespace BaseMacro
             int startFloor = lastTriggeredFloor + 1;
             int triggerCount = times.Length;
 
-            // 使用本地数组缓存键码
-            var localKeyCodes = keyCodes;
-            int keyCodeCount = localKeyCodes.Count;
-
             // 主循环
             for (int i = startFloor; i < triggerCount; i++)
             {
@@ -518,31 +514,37 @@ namespace BaseMacro
                 if (adjustedTrigger > nextFrameTime) break;
                 if (i <= lastTriggeredFloor) continue;
 
-                // 长按处理
+                bool releaseOnly = false;
                 if (simulateKeyPress && floor.holdLength > -1 && i + 1 < triggerCount)
                 {
                     var nextFloor = floors[i + 1];
                     if (nextFloor != null && nextFloor.holdLength == -1)
                     {
-                        if (isKeyDown && pendingKey.HasValue)
-                        {
-                            UpdateKeyState(null);
-                        }
-                        lastTriggeredFloor = i + 1;
-                        continue;
+                        releaseOnly = true;
                     }
                 }
 
-                // 按键触发
-                if (simulateKeyPress && keyCodeCount > 0)
-                {
-                    byte key = localKeyCodes[keyIndex];
-                    UpdateKeyState(key);
-                    keyIndex = (keyIndex + 1) % keyCodeCount;
-                }
-                else if (!simulateKeyPress)
+                if (!simulateKeyPress)
                 {
                     controller.Hit(false);
+                }
+                else if (releaseOnly)
+                {
+                    if (isKeyDown && pendingKey.HasValue)
+                    {
+                        UpdateKeyState(null);
+                    }
+                    if (i + 1 > lastTriggeredFloor)
+                    {
+                        lastTriggeredFloor = i + 1;
+                    }
+                }
+                else if (simulateKeyPress && keyCodes.Count > 0)
+                {
+                    byte key = keyCodes[keyIndex];
+                    UpdateKeyState(key);
+
+                    keyIndex = (keyIndex + 1) % keyCodes.Count;
                 }
 
                 lastTriggeredFloor = i;
