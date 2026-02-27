@@ -1,105 +1,83 @@
 ﻿using BaseMacro.Platform;
 using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Threading;
-using static BaseMacro.SkyHookSystem;
+using static BaseMacro.Macro.SkyHookSystem;
 
 #nullable enable
 
-namespace BaseMacro
+namespace BaseMacro.Macro
 {
     /// <summary>
-    /// 异步输入管理器（完全模拟 AsyncInputManager）
+    /// 异步输入管理器 - 使用 C++ DLL 实现高性能输入
     /// </summary>
-    public class AsyncInputManager
+    public static class AsyncInputManager
     {
-        // 常量定义
-        private const uint INPUT_KEYBOARD = 1;
-        private const uint KEYEVENTF_KEYDOWN = 0;
-        private const uint KEYEVENTF_KEYUP = 2;
-        private const uint KEYEVENTF_SCANCODE = 0x0008;
-
-        // 事件队列 - 使用 ConcurrentQueue 避免锁竞争
-        private static readonly System.Collections.Concurrent.ConcurrentQueue<SkyHookEvent> eventQueue = new();
-
-        // 处理线程
-        private static Thread? processingThread;
-        private static volatile bool isRunning = false;
-        private static readonly ManualResetEventSlim eventSignal = new(false);
-
-        // 批处理大小，避免单次处理过多
-        private const int MAX_BATCH_SIZE = 64;
-
-        // Windows API 声明
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-        [DllImport("user32.dll")]
-        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+        private static bool _isInitialized = false;
 
         // 性能计数器
-        private static long totalEventsProcessed = 0;
-        private static long totalEventsDropped = 0;
-        private static readonly long maxQueueSize = 1024;
+        private static long _totalEventsProcessed = 0;
+        private static long _totalEventsDropped = 0;
 
         /// <summary>
-        /// 启动 SkyHook 输入系统
+        /// 启动输入系统
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Start()
         {
-            if (isRunning)
+            if (_isInitialized)
             {
-                Macro.Log("[SkyHook] 输入系统已经在运行中");
+                Macro.Log("[InputSystem] 输入系统已经在运行中");
                 return;
             }
 
-            isRunning = true;
-            totalEventsProcessed = 0;
-            totalEventsDropped = 0;
-
-            Macro.Log("[SkyHook] 正在启动输入系统...");
-
-            // 启动高优先级处理线程
-            processingThread = new Thread(ProcessEventQueue)
+            try
             {
-                Name = "SkyHookProcessor",
-                IsBackground = true,
-                Priority = ThreadPriority.Highest
-            };
-            processingThread.Start();
+                // 重置计数器
+                _totalEventsProcessed = 0;
+                _totalEventsDropped = 0;
+                _isInitialized = true;
 
-            Macro.Log("[SkyHook] 处理线程已启动");
+                // 启动处理
+                InputSystem.StartProcessing();
+
+                Macro.Log("[InputSystem] 输入系统启动成功");
+            }
+            catch (Exception ex)
+            {
+                Macro.Log($"[InputSystem] 启动失败: {ex.Message}");
+                _isInitialized = false;
+            }
         }
 
         /// <summary>
-        /// 停止 SkyHook 输入系统
+        /// 停止输入系统
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Stop()
         {
-            Macro.Log("[SkyHook] 正在停止输入系统...");
-            isRunning = false;
+            if (!_isInitialized) return;
 
-            // 唤醒线程让其退出
-            eventSignal.Set();
+            Macro.Log("[InputSystem] 正在停止输入系统...");
 
-            // 等待线程结束
-            if (processingThread != null && processingThread.IsAlive)
+            try
             {
-                if (!processingThread.Join(1000))
-                {
-                    processingThread.Interrupt();
-                }
+                // 紧急停止，清空队列
+                InputSystem.EmergencyStop();
+
+                // 停止处理
+                InputSystem.StopProcessing();
+
+                var status = InputSystem.GetStatus();
+                Macro.Log($"[InputSystem] 已停止，队列剩余: {status.queueSize}, 已处理: {status.processedCount}");
             }
-
-            // 清空队列
-            while (eventQueue.TryDequeue(out _)) { }
-
-            Macro.Log($"[SkyHook] 输入系统已停止，共处理 {totalEventsProcessed} 个事件，丢弃 {totalEventsDropped} 个");
-            processingThread = null;
+            catch (Exception ex)
+            {
+                Macro.Log($"[InputSystem] 停止失败: {ex.Message}");
+            }
+            finally
+            {
+                _isInitialized = false;
+            }
         }
 
         /// <summary>
@@ -108,149 +86,74 @@ namespace BaseMacro
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void EnqueueEvent(SkyHookEvent evt)
         {
-            // 队列保护：如果队列太长，丢弃旧事件
-            if (eventQueue.Count > maxQueueSize)
-            {
-                // 尝试丢弃最旧的10个事件
-                for (int i = 0; i < 10; i++)
-                {
-                    if (eventQueue.TryDequeue(out _))
-                        Interlocked.Increment(ref totalEventsDropped);
-                    else
-                        break;
-                }
-                Macro.Log($"[SkyHook] 警告：队列积压 {eventQueue.Count}，已丢弃部分事件");
-            }
+            if (!_isInitialized) return;
 
-            eventQueue.Enqueue(evt);
-            eventSignal.Set();
-        }
-
-        /// <summary>
-        /// 处理事件队列的线程
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ProcessEventQueue()
-        {
-            Macro.Log("[SkyHook] 处理线程开始运行");
-
-            int processedCount = 0;
-            DateTime lastLogTime = DateTime.UtcNow;
-
-            // 预分配批处理数组，减少GC
-            var batchEvents = new SkyHookEvent[MAX_BATCH_SIZE];
-
-            while (isRunning)
-            {
-                try
-                {
-                    // 等待事件信号（最多100ms）
-                    eventSignal.Wait(100);
-
-                    if (!isRunning) break;
-
-                    int batchProcessed = 0;
-
-                    // 批量取出事件
-                    while (batchProcessed < MAX_BATCH_SIZE && isRunning)
-                    {
-                        if (eventQueue.TryDequeue(out SkyHookEvent evt))
-                        {
-                            batchEvents[batchProcessed] = evt;
-                            batchProcessed++;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
-
-                    // 批量处理事件
-                    if (batchProcessed > 0)
-                    {
-                        // 发送事件
-                        for (int i = 0; i < batchProcessed; i++)
-                        {
-                            SendInputFromSkyHook(batchEvents[i]);
-                        }
-
-                        Interlocked.Add(ref totalEventsProcessed, batchProcessed);
-                        processedCount += batchProcessed;
-                    }
-
-                    // 每秒输出一次统计信息
-                    DateTime now = DateTime.UtcNow;
-                    if ((now - lastLogTime).TotalSeconds >= 1)
-                    {
-                        if (processedCount > 0 || totalEventsDropped > 0)
-                        {
-                            Macro.Log($"[SkyHook] 处理线程: 速率={processedCount}/s, 队列={eventQueue.Count}, 丢弃={totalEventsDropped}");
-                            processedCount = 0;
-                        }
-                        lastLogTime = now;
-                    }
-
-                    // 如果这一批处理了很多事件，让出CPU
-                    if (batchProcessed > 32)
-                    {
-                        Thread.Sleep(1);
-                    }
-                }
-                catch (ThreadInterruptedException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Macro.Log($"[SkyHook] 处理线程异常: {ex.Message}");
-                    Thread.Sleep(10);
-                }
-            }
-
-            Macro.Log("[SkyHook] 处理线程结束");
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static void SendInputFromSkyHook(SkyHookEvent evt)
-        {
             try
             {
                 bool isDown = evt.Type == EventType.KeyPressed;
 
-                // 获取扫描码
-                ushort scanCode = (ushort)MapVirtualKey(evt.Key, 0);
+                // 直接调用 DLL 的 PushKeyEvent
+                int result = InputSystem.PushKeyEvent((byte)evt.Key, isDown, 0);
 
-                INPUT input = new()
+                if (result == 0)
                 {
-                    type = INPUT_KEYBOARD,
-                    u = new InputUnion
-                    {
-                        ki = new KEYBDINPUT
-                        {
-                            wVk = 0,
-                            wScan = scanCode,
-                            dwFlags = (isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP) | KEYEVENTF_SCANCODE,
-                            time = 0,
-                            dwExtraInfo = IntPtr.Zero
-                        }
-                    }
-                };
-
-                uint result = SendInput(1, [input], Marshal.SizeOf(typeof(INPUT)));
-
-                if (result != 1)
+                    System.Threading.Interlocked.Increment(ref _totalEventsProcessed);
+                }
+                else if (result == -2) // 队列满
                 {
-                    int error = Marshal.GetLastWin32Error();
-                    // 只记录重要错误，避免刷屏
-                    if (error != 0)
-                    {
-                        Macro.Log($"[SkyHook] SendInput 失败: Key=0x{evt.Key:X2} 错误码={error}");
-                    }
+                    System.Threading.Interlocked.Increment(ref _totalEventsDropped);
+                    Macro.Log($"[InputSystem] 警告：队列满，丢弃事件 {evt.Key}");
+                }
+                else
+                {
+                    Macro.Log($"[InputSystem] 推送事件失败: {result}");
                 }
             }
             catch (Exception ex)
             {
-                Macro.Log($"[SkyHook] SendInput 异常: {ex.Message}");
+                Macro.Log($"[InputSystem] 推送事件异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 批量添加事件 - 通过循环单个推送实现
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void EnqueueEvents(SkyHookEvent[] events)
+        {
+            if (!_isInitialized || events == null || events.Length == 0) return;
+
+            try
+            {
+                int successCount = 0;
+                for (int i = 0; i < events.Length; i++)
+                {
+                    bool isDown = events[i].Type == EventType.KeyPressed;
+                    int result = InputSystem.PushKeyEvent((byte)events[i].Key, isDown, 0);
+
+                    if (result == 0)
+                    {
+                        successCount++;
+                    }
+                    else if (result == -2)
+                    {
+                        System.Threading.Interlocked.Increment(ref _totalEventsDropped);
+                    }
+                }
+
+                if (successCount > 0)
+                {
+                    System.Threading.Interlocked.Add(ref _totalEventsProcessed, successCount);
+                }
+
+                if (successCount < events.Length)
+                {
+                    Macro.Log($"[InputSystem] 批量推送部分失败: {successCount}/{events.Length}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Macro.Log($"[InputSystem] 批量推送异常: {ex.Message}");
             }
         }
 
@@ -260,7 +163,34 @@ namespace BaseMacro
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static (int queueSize, long processed, long dropped) GetStats()
         {
-            return (eventQueue.Count, totalEventsProcessed, totalEventsDropped);
+            try
+            {
+                var status = InputSystem.GetStatus();
+                return (status.queueSize, _totalEventsProcessed, _totalEventsDropped);
+            }
+            catch
+            {
+                return (0, _totalEventsProcessed, _totalEventsDropped);
+            }
+        }
+
+        /// <summary>
+        /// 清空队列
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ClearQueue()
+        {
+            if (!_isInitialized) return;
+
+            try
+            {
+                InputSystem.ClearQueue();
+                Macro.Log("[InputSystem] 队列已清空");
+            }
+            catch (Exception ex)
+            {
+                Macro.Log($"[InputSystem] 清空队列失败: {ex.Message}");
+            }
         }
     }
 }

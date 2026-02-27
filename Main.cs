@@ -1,4 +1,5 @@
-﻿using HarmonyLib;
+﻿using BaseMacro.Macro;
+using HarmonyLib;
 using SA.GoogleDoc;
 using System;
 using System.Collections.Generic;
@@ -27,6 +28,16 @@ namespace BaseMacro
             Mod = modEntry;
             Settings = Settings.Load(modEntry);
 
+            // 手动初始化 InputSystem
+            if (InputSystem.Initialize())
+            {
+                modEntry.Logger.Log("[InputSystem] 初始化成功");
+            }
+            else
+            {
+                modEntry.Logger.Log("[InputSystem] 初始化失败");
+            }
+
             modEntry.OnToggle = OnToggle;
             modEntry.OnGUI = Settings.OnGUI;
             modEntry.OnSaveGUI = Settings.OnSaveGUI;
@@ -54,7 +65,7 @@ namespace BaseMacro
                 IsEnabled = false;
                 Harmony?.UnpatchAll();
                 TrySetWindowTitle(null);
-
+                InputSystem.Stop();
             }
             return true;
         }

@@ -1,4 +1,5 @@
-﻿using BaseMacro.Platform;
+﻿using BaseMacro.Macro;
+using BaseMacro.Platform;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
@@ -18,8 +19,8 @@ namespace BaseMacro
             [HarmonyPostfix]
             public static void Postfix(scrController __instance)
             {
-                Macro.Update(__instance);
-                Macro.HandleInput();
+                Macro.Macro.Update(__instance);
+                Macro.Macro.HandleInput();
             }
         }
 
@@ -27,14 +28,14 @@ namespace BaseMacro
         public static class Patch_Awake_Rewind
         {
             [HarmonyPostfix]
-            public static void Postfix(scrController __instance) => Macro.Reset(__instance);
+            public static void Postfix(scrController __instance) => Macro.Macro.Reset(__instance);
         }
 
         [HarmonyPatch(typeof(scrController), nameof(scrController.Restart))]
         public static class Patch_Restart
         {
             [HarmonyPrefix]
-            public static void Prefix(scrController __instance) => Macro.Reset(__instance);
+            public static void Prefix(scrController __instance) => Macro.Macro.Reset(__instance);
         }
         [HarmonyPatch(typeof(scrConductor), "Update")]
         public static class __scrConductor

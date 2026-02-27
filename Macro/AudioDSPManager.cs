@@ -14,7 +14,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
-namespace BaseMacro
+namespace BaseMacro.Macro
 {
     public static unsafe class AudioDSPManager
     {

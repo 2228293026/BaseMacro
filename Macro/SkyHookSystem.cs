@@ -6,7 +6,7 @@ using System.Threading;
 
 #nullable enable
 
-namespace BaseMacro
+namespace BaseMacro.Macro
 {
     #region SkyHook 系统独立实现
 

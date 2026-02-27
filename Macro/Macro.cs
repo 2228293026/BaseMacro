@@ -9,7 +9,7 @@ using UnityEngine;
 
 #nullable enable
 
-namespace BaseMacro
+namespace BaseMacro.Macro
 {
 
     #region TimeBasedMacro
@@ -434,6 +434,8 @@ namespace BaseMacro
                 Array.Clear(pendingKeyEvents, 0, pendingKeyCount);
                 pendingKeyCount = 0;
             }
+
+            AsyncInputManager.ClearQueue();
 
             if (Main.Settings.SkyHookMode)
             {
