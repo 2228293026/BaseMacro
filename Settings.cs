@@ -199,10 +199,6 @@ namespace BaseMacro
 
             // 如果是测试版，在标题旁显示测试版标记
             string headerText = UseChinese ? "语言" : "Language";
-            if (IsBeta)
-            {
-                headerText += $" (Beta {BetaVersion})";
-            }
 
             GUILayout.Label(headerText, UIUtils.HeaderStyle);
             GUILayout.Space(2);
