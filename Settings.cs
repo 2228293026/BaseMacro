@@ -1,6 +1,7 @@
 ﻿using HarmonyLib;
 using Newgrounds;
 using System;
+using System.Reflection;
 using UnityEngine;
 using UnityModManagerNet;
 
@@ -97,6 +98,44 @@ namespace BaseMacro
         private (string input, bool focused) _adjustStepState = (string.Empty, false);
         private (string input, bool focused) _timeOffsetState = (string.Empty, false);
 
+        // 添加测试版判断属性
+        private int? _betaVersion = null;
+        private int BetaVersion
+        {
+            get
+            {
+                if (_betaVersion == null)
+                {
+                    _betaVersion = GetBetaVersionFromAssembly();
+                }
+                return _betaVersion.Value;
+            }
+        }
+
+        private bool IsBeta => BetaVersion > 0;
+
+        private int GetBetaVersionFromAssembly()
+        {
+            try
+            {
+                Assembly assembly = Assembly.GetExecutingAssembly();
+                Version version = assembly.GetName().Version;
+                // 获取版本号的第四位（修订号）
+                int betaNumber = version.Revision;
+                return betaNumber;
+            }
+            catch
+            {
+                return 0; // 如果获取失败，默认为正式版
+            }
+        }
+
+        private string GetBetaText()
+        {
+            if (!IsBeta) return "";
+            return UseChinese ? $"测试版 {BetaVersion}" : $"Beta {BetaVersion}";
+        }
+
         public void OnGUI(UnityModManager.ModEntry modEntry)
         {
             UIUtils.InitializeStyles();
@@ -141,6 +180,13 @@ namespace BaseMacro
             GUILayout.Space(12);
 
             DrawAuthorCard();
+
+            // 如果是测试版，添加测试版水印卡片
+            if (IsBeta)
+            {
+                GUILayout.Space(12);
+                DrawBetaCard();
+            }
 
             GUILayout.EndVertical();
 
@@ -282,6 +328,39 @@ namespace BaseMacro
 
             GUILayout.EndVertical();
         }
+        private void DrawBetaCard()
+        {
+            GUILayout.BeginHorizontal();
+            // 创建测试版样式（更显眼的颜色）
+            GUIStyle betaStyle = new(UIUtils.LabelStyle);
+            betaStyle.normal.textColor = new Color(1f, 0.5f, 0f, 0.9f); // 橙色
+            betaStyle.fontSize =12;
+            betaStyle.fontStyle = FontStyle.Bold;
+            betaStyle.alignment = TextAnchor.MiddleLeft;
+            betaStyle.richText = true;
+
+            // 测试版水印
+            string betaText = UseChinese ?
+                $"⚠️ 测试版本 {BetaVersion} - 功能可能不稳定，请谨慎使用 ⚠️" :
+                $"⚠️ Beta Version {BetaVersion} - Features may be unstable, use with caution ⚠️";
+
+            GUILayout.Label(betaText, betaStyle);
+
+            // 可选：添加反馈提示
+            GUIStyle feedbackStyle = new(UIUtils.LabelStyle);
+            feedbackStyle.normal.textColor = new Color(0.5f, 0.5f, 0.5f, 0.7f);
+            feedbackStyle.fontSize = 10;
+            feedbackStyle.alignment = TextAnchor.MiddleRight;
+
+            string feedbackText = UseChinese ?
+                "如遇问题请通过邮箱反馈，感谢您的测试！" :
+                "Please report issues via email. Thank you for testing!";
+
+            GUILayout.Space(4);
+            GUILayout.Label(feedbackText, feedbackStyle);
+            GUILayout.EndHorizontal();
+        }
+
         public void OnSaveGUI(UnityModManager.ModEntry modEntry) => Save(modEntry);
         public override void Save(UnityModManager.ModEntry modEntry) => Save(this, modEntry);
         public static Settings Load(UnityModManager.ModEntry modEntry) => Load<Settings>(modEntry);
