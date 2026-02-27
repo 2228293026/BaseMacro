@@ -56,7 +56,7 @@ namespace BaseMacro
             public static IEnumerable<CodeInstruction> Transpiler_Update(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
             {
                 // 如果开关关闭，直接返回原始指令，不进行任何修改
-                if (!Main.Settings.HighPrecisionTime)
+                if (!Main.Settings.HighPrecisionAsync)
                 {
                     return instructions;
                 }
