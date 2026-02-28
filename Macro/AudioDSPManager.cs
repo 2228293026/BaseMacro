@@ -18,7 +18,7 @@ namespace BaseMacro.Macro
 {
     public static unsafe class AudioDSPManager
     {
-        public const double HIGH_PRECISE = 1.0 / 750.0;
+        public const double HIGH_PRECISE = 1.0 / 187.5;
         public const double MID_PRECISE = 1.0 / 150.0;
         public const double LOW_PRECISE = 1.0 / 30.0;
         public const double SEC_2_TICK = 10000000.0;
@@ -77,11 +77,11 @@ namespace BaseMacro.Macro
             double error = realDsp - dspTime;
 
             // 误差死区：微小误差忽略
-            if (Math.Abs(error) < ERROR_DEADZONE)
-            {
-                cpy_dspTime = dspTime;
-                return;
-            }
+            // if (Math.Abs(error) < ERROR_DEADZONE)
+            // {
+                // cpy_dspTime = dspTime;
+                // return;
+            // }
 
             // 原有的误差累积逻辑
             dspDeltaTime += error;
@@ -90,11 +90,23 @@ namespace BaseMacro.Macro
             cpy_dspTime = dspTime + avg;
 
             // 大误差：平滑校正而不是硬重置
-            if (Math.Abs(avg) > LOW_PRECISE)
+            // 当平均误差绝对值超过 LOW_PRECISE 时
+            // if (Math.Abs(avg) > LOW_PRECISE)
+            // {
+                // safe = false;
+                // 平滑校正：只将当前误差的一半加到 dspTime 上
+                // dspTime += error * 0.5;
+                // 清空累积的误差
+                // dspDeltaTime = 0;
+                // dspDeltaTimeCount = 0;
+                // dspErrorCounter = 0;
+            // }
+            if (avg > LOW_PRECISE || avg < (-LOW_PRECISE))
             {
                 safe = false;
-                // 只校正一半的误差，避免跳变
-                dspTime += error * 0.5;
+                // 硬重置：直接设置为真实DSP时间，并减去半个中等精度值
+                dspTime = AudioSettings.dspTime - MID_PRECISE / 2;
+                // 清空累积的误差
                 dspDeltaTime = 0;
                 dspDeltaTimeCount = 0;
                 dspErrorCounter = 0;
@@ -114,10 +126,9 @@ namespace BaseMacro.Macro
             }
             else if (dspDeltaTimeCount >= SINGLE_ROUND)
             {
-                if (!safe && Math.Abs(avg) > HIGH_PRECISE)
+                if (!safe && (avg > HIGH_PRECISE || avg < (-HIGH_PRECISE)))
                 {
-                    // 微调
-                    dspTime += avg * 0.2;
+                    dspTime += avg;
                 }
                 else
                 {
