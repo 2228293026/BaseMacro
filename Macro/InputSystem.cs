@@ -19,21 +19,21 @@ namespace BaseMacro.Macro
         [DllImport("kernel32.dll")]
         private static extern bool FreeLibrary(IntPtr hModule);
 
-        // 委托定义
+        // 委托定义 - 确保调用约定和参数类型完全匹配
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int InitializeDelegate(int maxQueueSize);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate int PushKeyEventDelegate(byte keyCode, bool isDown, uint delayMs);
+        private delegate int PushKeyEventDelegate(byte keyCode, [MarshalAs(UnmanagedType.Bool)] bool isDown, uint delayMs);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate int SendKeyDirectDelegate(byte keyCode, bool isDown);
+        private delegate int SendKeyDirectDelegate(byte keyCode, [MarshalAs(UnmanagedType.Bool)] bool isDown);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private unsafe delegate int SendKeyCombinationDelegate(byte* keys, int keyCount, uint delayMs);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate int SendTextDelegate(string text);
+        private delegate int SendTextDelegate([MarshalAs(UnmanagedType.LPStr)] string text);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int StartProcessingDelegate();
@@ -53,6 +53,10 @@ namespace BaseMacro.Macro
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void EmergencyStopDelegate();
 
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate bool IsUsingNtFunctionsDelegate();
+
+
         // 函数指针
         private static InitializeDelegate InitializeFunc;
         private static PushKeyEventDelegate PushKeyEventFunc;
@@ -65,21 +69,15 @@ namespace BaseMacro.Macro
         private static GetInputQueueStatusDelegate GetInputQueueStatusFunc;
         private static ShutdownDelegate ShutdownFunc;
         private static EmergencyStopDelegate EmergencyStopFunc;
+        private static IsUsingNtFunctionsDelegate IsUsingNtFunctionsFunc;
 
-        // 公共初始化方法 - 在 Main.Load 中调用
         public static bool Initialize()
         {
             if (_isInitialized) return true;
 
             try
             {
-                // 1. 确定 DLL 路径
-                string modPath = Main.Mod?.Path;
-                if (string.IsNullOrEmpty(modPath))
-                {
-                    modPath = Path.GetDirectoryName(typeof(InputSystem).Assembly.Location);
-                }
-
+                string modPath = Main.Mod?.Path ?? Path.GetDirectoryName(typeof(InputSystem).Assembly.Location);
                 string dllPath = Path.Combine(modPath, "InputSystem.dll");
 
                 if (!File.Exists(dllPath))
@@ -90,7 +88,6 @@ namespace BaseMacro.Macro
 
                 Console.WriteLine($"[InputSystem] 加载 DLL: {dllPath}");
 
-                // 2. 加载 DLL
                 _hModule = LoadLibrary(dllPath);
                 if (_hModule == IntPtr.Zero)
                 {
@@ -101,7 +98,7 @@ namespace BaseMacro.Macro
 
                 Console.WriteLine("[InputSystem] LoadLibrary 成功");
 
-                // 3. 获取所有函数地址
+                // 获取所有函数地址
                 InitializeFunc = GetDelegate<InitializeDelegate>("Initialize");
                 PushKeyEventFunc = GetDelegate<PushKeyEventDelegate>("PushKeyEvent");
                 SendKeyDirectFunc = GetDelegate<SendKeyDirectDelegate>("SendKeyDirect");
@@ -113,16 +110,18 @@ namespace BaseMacro.Macro
                 GetInputQueueStatusFunc = GetDelegate<GetInputQueueStatusDelegate>("GetInputQueueStatus");
                 ShutdownFunc = GetDelegate<ShutdownDelegate>("Shutdown");
                 EmergencyStopFunc = GetDelegate<EmergencyStopDelegate>("EmergencyStop");
+                IsUsingNtFunctionsFunc = GetDelegate<IsUsingNtFunctionsDelegate>("IsUsingNtFunctions");
 
-                if (InitializeFunc == null)
+                // 检查必要的函数
+                if (InitializeFunc == null || PushKeyEventFunc == null)
                 {
-                    Console.WriteLine("[InputSystem] 找不到 Initialize@4");
+                    Console.WriteLine("[InputSystem] 缺少必要的导出函数");
                     FreeLibrary(_hModule);
                     _hModule = IntPtr.Zero;
                     return false;
                 }
 
-                // 4. 测试调用
+                // 测试调用
                 int result = InitializeFunc(2048);
                 Console.WriteLine($"[InputSystem] 初始化结果: {result}");
 
@@ -155,7 +154,7 @@ namespace BaseMacro.Macro
         }
 
         // 包装函数
-        public static int PushKeyEvent(byte keyCode, bool isDown, uint delayMs)
+        public static int PushKeyEvent(byte keyCode, bool isDown, uint delayMs = 0)
         {
             if (!_isInitialized || PushKeyEventFunc == null) return -1;
             return PushKeyEventFunc(keyCode, isDown, delayMs);
@@ -167,15 +166,21 @@ namespace BaseMacro.Macro
             return SendKeyDirectFunc(keyCode, isDown);
         }
 
-        public static unsafe int SendKeyCombination(byte* keys, int keyCount, uint delayMs)
+        public static unsafe int SendKeyCombination(byte[] keys, uint delayMs = 50)
         {
-            if (!_isInitialized || SendKeyCombinationFunc == null) return -1;
-            return SendKeyCombinationFunc(keys, keyCount, delayMs);
+            if (!_isInitialized || SendKeyCombinationFunc == null || keys == null || keys.Length == 0)
+                return -1;
+
+            fixed (byte* pKeys = keys)
+            {
+                return SendKeyCombinationFunc(pKeys, keys.Length, delayMs);
+            }
         }
 
         public static int SendText(string text)
         {
-            if (!_isInitialized || SendTextFunc == null) return -1;
+            if (!_isInitialized || SendTextFunc == null || string.IsNullOrEmpty(text))
+                return -1;
             return SendTextFunc(text);
         }
 
@@ -225,27 +230,31 @@ namespace BaseMacro.Macro
             EmergencyStopFunc();
         }
 
-        // 辅助方法
-        public static void KeyDown(byte keyCode) => PushKeyEvent(keyCode, true, 0);
-        public static void KeyUp(byte keyCode) => PushKeyEvent(keyCode, false, 0);
-
-        public static void KeyPress(byte keyCode, int durationMs = 50)
+        public static bool IsUsingNtFunctions()
         {
-            PushKeyEvent(keyCode, true, (uint)durationMs);
-            PushKeyEvent(keyCode, false, 0);
+            if (!_isInitialized || IsUsingNtFunctionsFunc == null) return false;
+            try
+            {
+                return IsUsingNtFunctionsFunc();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // 辅助方法
+        public static void KeyDown(byte keyCode) => PushKeyEvent(keyCode, true);
+        public static void KeyUp(byte keyCode) => PushKeyEvent(keyCode, false);
+
+        public static void KeyPress(byte keyCode, uint durationMs = 50)
+        {
+            PushKeyEvent(keyCode, true, durationMs);
+            PushKeyEvent(keyCode, false);
         }
 
         public static void KeyDownDirect(byte keyCode) => SendKeyDirect(keyCode, true);
         public static void KeyUpDirect(byte keyCode) => SendKeyDirect(keyCode, false);
-
-        public static unsafe int SendKeyCombination(byte[] keys, uint delayMs = 50)
-        {
-            if (keys == null || keys.Length == 0) return -1;
-            fixed (byte* pKeys = keys)
-            {
-                return SendKeyCombination(pKeys, keys.Length, delayMs);
-            }
-        }
 
         public static (int queueSize, int processedCount) GetStatus()
         {
@@ -253,7 +262,6 @@ namespace BaseMacro.Macro
             return (queueSize, processedCount);
         }
 
-        public static void ClearInputQueue() => ClearQueue();
-        public static void Stop() => EmergencyStop();
+        public static bool IsInitialized => _isInitialized;
     }
 }

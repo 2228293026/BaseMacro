@@ -457,6 +457,7 @@ namespace BaseMacro.Macro
                 {
                     AsyncInputManager.Stop();
                     skyHookInitialized = false;
+                    Log("[Macro] SkyHook模式已停止 - 场景切换或暂停");
                 }
                 return;
             }
@@ -464,36 +465,77 @@ namespace BaseMacro.Macro
             // 模式切换检查
             if (settings.SkyHookMode != skyHookInitialized)
             {
+                Log($"[Macro] 模式切换: SkyHookMode={settings.SkyHookMode}, 当前状态={skyHookInitialized}");
                 SwitchMode(settings.SkyHookMode);
             }
 
             // 初始化检查
             if (!initialized)
             {
+                Log("[Macro] 开始初始化...");
                 Initialize();
-                if (!initialized) return;
+                if (!initialized)
+                {
+                    Log("[Macro] 初始化失败");
+                    return;
+                }
+                Log("[Macro] 初始化完成");
             }
             else if (NeedReinitialize())
             {
+                Log("[Macro] 检测到需要重新初始化");
                 Reset(controller);
                 Initialize();
-                if (!initialized) return;
+                if (!initialized)
+                {
+                    Log("[Macro] 重新初始化失败");
+                    return;
+                }
+                Log("[Macro] 重新初始化完成");
             }
 
             // 缓存局部变量
             var cond = conductor;
             var floors = cachedFloors;
             var times = triggerTimes;
-            if (cond == null || floors == null || times == null) return;
+            if (cond == null || floors == null || times == null)
+            {
+                Log($"[Macro] 数据无效: cond={cond != null}, floors={floors != null}, times={times != null}");
+                return;
+            }
 
             // 预计算常用值
             double currentTime = cond.songposition_minusi;
-            double nextFrameTime = currentTime + (Time.unscaledDeltaTime * cond.song.pitch);
+            double unscaledDeltaTime = Time.unscaledDeltaTime;
+            float pitch = cond.song.pitch;
+            double nextFrameTime = currentTime + (unscaledDeltaTime * pitch);
             double timeOffset = settings.TimeOffset * 0.001;
             bool simulateKeyPress = settings.SimulateKeyPress;
 
+            // 时间计算日志
+            Log($"[Macro] 时间计算 - 当前时间: {currentTime:F6}s, DeltaTime: {unscaledDeltaTime:F6}s, 曲速: {pitch:F3}, 下一帧时间: {nextFrameTime:F6}s, 偏移量: {timeOffset:F6}s");
+
             int startFloor = lastTriggeredFloor + 1;
             int triggerCount = times.Length;
+
+            int nextFloorIndex = lastTriggeredFloor + 1;
+
+            if (nextFloorIndex < times.Length)
+            {
+                double nextTriggerTime = times[nextFloorIndex] + timeOffset;
+                double timeUntilNextTrigger = nextTriggerTime - currentTime;
+
+                Log($"[Macro] === 帧开始 ===");
+                Log($"[Macro] 当前时间: {currentTime:F6}s");
+                Log($"[Macro] 下一帧时间: {nextFrameTime:F6}s (Δ={unscaledDeltaTime * pitch:F6}s)");
+                Log($"[Macro] 等待地板: Index={nextFloorIndex}, 触发时间={nextTriggerTime:F6}s");
+                Log($"[Macro] 剩余等待: {timeUntilNextTrigger:F6}s");
+                Log($"[Macro] 时间窗口内: {(nextTriggerTime <= nextFrameTime ? "是" : $"否 (还需 {nextTriggerTime - nextFrameTime:F6}s)")}");
+            }
+            else
+            {
+                Log($"[Macro] 所有地板已处理完成 (lastTriggeredFloor={lastTriggeredFloor}, 总数={times.Length})");
+            }
 
             // 主循环
             for (int i = startFloor; i < triggerCount; i++)
@@ -504,13 +546,26 @@ namespace BaseMacro.Macro
                 if (floor.nextfloor?.auto == true || floor.midSpin)
                 {
                     lastTriggeredFloor = i;
+                    Log($"[Macro] 跳过自动/中旋地板: FloorIndex={i}");
                     continue;
                 }
 
                 double adjustedTrigger = times[i] + timeOffset;
 
-                if (adjustedTrigger > nextFrameTime) break;
-                if (i <= lastTriggeredFloor) continue;
+                // 触发时间计算日志
+                Log($"[Macro] 触发检查 - FloorIndex={i}, 原始触发时间: {times[i]:F6}s, 调整后: {adjustedTrigger:F6}s, 下一帧时间: {nextFrameTime:F6}s");
+
+                if (adjustedTrigger > nextFrameTime)
+                {
+                    Log($"[Macro] 触发时间超出下一帧 - FloorIndex={i}, 调整后: {adjustedTrigger:F6}s > 下一帧: {nextFrameTime:F6}s");
+                    break;
+                }
+
+                if (i <= lastTriggeredFloor)
+                {
+                    Log($"[Macro] 已处理过的地板 - FloorIndex={i}, 最后触发: {lastTriggeredFloor}");
+                    continue;
+                }
 
                 bool releaseOnly = false;
                 if (simulateKeyPress && floor.holdLength > -1 && i + 1 < triggerCount)
@@ -519,47 +574,57 @@ namespace BaseMacro.Macro
                     if (nextFloor != null && nextFloor.holdLength == -1)
                     {
                         releaseOnly = true;
+                        Log($"[Macro] 检测到释放模式 - FloorIndex={i}, 当前Hold长度: {floor.holdLength}");
                     }
                 }
 
                 if (!simulateKeyPress)
                 {
                     controller.Hit(false);
+                    Log($"[Macro] 模拟点击 - FloorIndex={i}, 方法: controller.Hit");
                 }
                 else if (releaseOnly)
                 {
                     if (isKeyDown && pendingKey.HasValue)
                     {
+                        Log($"[Macro] 释放按键 - FloorIndex={i}, 当前按键: {pendingKey.Value}");
                         UpdateKeyState(null);
                     }
                     if (i + 1 > lastTriggeredFloor)
                     {
                         lastTriggeredFloor = i + 1;
+                        Log($"[Macro] 跳过下一个地板 - 当前FloorIndex={i}, 最后触发更新为: {lastTriggeredFloor}");
                     }
                 }
                 else if (simulateKeyPress && keyCodes.Count > 0)
                 {
                     byte key = keyCodes[keyIndex];
+                    Log($"[Macro] 按下按键 - FloorIndex={i}, 按键代码: {key}, 索引: {keyIndex}, 总按键数: {keyCodes.Count}");
                     UpdateKeyState(key);
 
                     keyIndex = (keyIndex + 1) % keyCodes.Count;
+                    Log($"[Macro] 更新按键索引 - 新索引: {keyIndex}");
                 }
 
                 lastTriggeredFloor = i;
+                Log($"[Macro] 更新最后触发楼层 - FloorIndex={i}");
             }
 
             // 使用高性能的 FlushSendInputEvents 发送事件
             if (!settings.SkyHookMode && pendingKeyCount > 0)
             {
+                Log($"[Macro] 发送输入事件 - 待处理按键数: {pendingKeyCount}");
                 FlushSendInputEvents();
             }
 
             // 强制释放检查
             if (isKeyDown && pendingKey.HasValue && lastTriggeredFloor >= triggerCount - 1)
             {
+                Log($"[Macro] 强制释放按键 - 最后触发楼层: {lastTriggeredFloor}, 总楼层数: {triggerCount}, 当前按键: {pendingKey.Value}");
                 UpdateKeyState(null);
                 if (!settings.SkyHookMode && pendingKeyCount > 0)
                 {
+                    Log($"[Macro] 强制释放后发送输入事件 - 待处理按键数: {pendingKeyCount}");
                     FlushSendInputEvents();
                 }
             }

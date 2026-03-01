@@ -28,6 +28,18 @@ namespace BaseMacro
             Mod = modEntry;
             Settings = Settings.Load(modEntry);
 
+            Mod.Info.IsCheat = true;
+            if (Mod.Info.IsCheat)
+            {
+                Mod.Info.DisplayName += " (Cheat)";
+            }
+            if (IsDebugAssembly())
+                Mod.Info.DisplayName += " <color=grey>(Debug)</color>";
+
+            if (Settings.IsBeta)
+            {
+                Mod.Info.Version += $"\nBeta{Settings.BetaVersion}";
+            }
             // 手动初始化 InputSystem
             if (InputSystem.Initialize())
             {
@@ -38,12 +50,30 @@ namespace BaseMacro
                 modEntry.Logger.Log("[InputSystem] 初始化失败");
             }
 
+            if (InputSystem.IsUsingNtFunctions())
+            {
+                modEntry.Logger.Log("[InputSystem] 当前使用 NT 内核函数");
+            }
+            else
+            {
+                modEntry.Logger.Log("[InputSystem] 当前使用传统输入模拟");
+            }
+
             modEntry.OnToggle = OnToggle;
             modEntry.OnGUI = Settings.OnGUI;
             modEntry.OnSaveGUI = Settings.OnSaveGUI;
 
             Harmony = new Harmony(modEntry.Info.Id);
             return true;
+        }
+
+        public static bool IsDebugAssembly()
+        {
+            Assembly assembly = Assembly.GetExecutingAssembly();
+            var attribute = assembly.GetCustomAttribute<DebuggableAttribute>();
+            if (attribute == null)
+                return false;
+            return attribute.IsJITOptimizerDisabled;
         }
 
         private static bool OnToggle(UnityModManager.ModEntry modEntry, bool value)
@@ -57,7 +87,7 @@ namespace BaseMacro
                     _uiObject = new GameObject("MacroText");
                     _uiObject.AddComponent<ShowText>();
                     UnityEngine.Object.DontDestroyOnLoad(_uiObject);
-                    TrySetWindowTitle($"{modEntry.Info.DisplayName}, {modEntry.Info.Version}, {modEntry.Info.Author}");
+                    TrySetWindowTitle($"{GetClean(modEntry.Info.DisplayName)}, {GetClean(modEntry.Info.Version)}, {modEntry.Info.Author}");
                 }
             }
             else
@@ -65,9 +95,23 @@ namespace BaseMacro
                 IsEnabled = false;
                 Harmony?.UnpatchAll();
                 TrySetWindowTitle(null);
-                InputSystem.Stop();
+                InputSystem.EmergencyStop();
             }
             return true;
+        }
+
+        public static string GetClean(string version)
+        {
+            if (version.Contains("<color="))
+            {
+                int startIndex = version.IndexOf('>') + 1;
+                int endIndex = version.LastIndexOf('<');
+                if (startIndex > 0 && endIndex > startIndex)
+                {
+                    return version.Substring(startIndex, endIndex - startIndex);
+                }
+            }
+            return version;
         }
 
         [DllImport("user32.dll")]
@@ -93,7 +137,11 @@ namespace BaseMacro
                 {
                     string newTitle = $"A Dance of Fire and Ice";
                     if (title != null)
-                        newTitle = $"A Dance of Fire and Ice - {title}";
+                    {
+                        // 修复：将换行符替换为空格
+                        string cleanTitle = title.Replace('\n', ' ').Replace('\r', ' ');
+                        newTitle = $"A Dance of Fire and Ice - {cleanTitle}";
+                    }
 
                     if (SetWindowText(hwnd, newTitle))
                     {

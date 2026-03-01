@@ -111,7 +111,7 @@ namespace BaseMacro
 
         // 添加测试版判断属性
         private int? _betaVersion = null;
-        private int BetaVersion
+        public int BetaVersion
         {
             get
             {
@@ -123,7 +123,7 @@ namespace BaseMacro
             }
         }
 
-        private bool IsBeta => BetaVersion > 0;
+        public bool IsBeta => BetaVersion > 0;
 
         private int GetBetaVersionFromAssembly()
         {
@@ -318,11 +318,8 @@ namespace BaseMacro
             GUILayout.FlexibleSpace();
 
             // 在版本号旁边显示测试版标记
-            string versionText = $"📦 {Main.Mod.Info.Version}";
-            if (IsBeta)
-            {
-                versionText += $" (Beta {BetaVersion})";
-            }
+            string cleanTitle = Main.Mod.Info.Version.Replace('\n', ' ').Replace('\r', ' ');
+            string versionText = $"📦 {cleanTitle}";
             GUILayout.Label(versionText, authorStyle);
 
             GUILayout.FlexibleSpace();
