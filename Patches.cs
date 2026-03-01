@@ -47,10 +47,7 @@ namespace BaseMacro
                 return DateTime.Now.Ticks - DateTime.UtcNow.Ticks + l;
             }
 
-            public static double Update_2()
-            {
-                return AudioDSPManager.GetDSPTime();
-            }
+            public static double Update_2() => DSPTimeSimulater.GetDSPTime();
 
             [HarmonyTranspiler]
             public static IEnumerable<CodeInstruction> Transpiler_Update(IEnumerable<CodeInstruction> instructions, ILGenerator generator)

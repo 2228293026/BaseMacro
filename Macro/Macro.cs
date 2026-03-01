@@ -169,7 +169,7 @@ namespace BaseMacro.Macro
         {
             if (Main.Settings.HighPrecisionTime)
             {
-                return AudioDSPManager.GetDSPTimeAsFileTime();
+                return DSPTimeSimulater.GetDSPTimeAsFileTime();
             }
             return GetPreciseTicks();
         }
@@ -440,10 +440,6 @@ namespace BaseMacro.Macro
             if (Main.Settings.SkyHookMode)
             {
                 startTimeTicks = GetAudioSyncTicks();
-            }
-            if (Main.Settings.HighPrecisionTime)
-            {
-                AudioDSPManager.Reset();
             }
             ApplyHoldBehavior(controller);
         }

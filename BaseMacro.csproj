@@ -133,7 +133,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Macro\AudioDSPManager.cs" />
+    <Compile Include="Macro\DSPTimeSimulater.cs" />
     <Compile Include="Macro\AsyncInputManager.cs" />
     <Compile Include="Macro\InputSystem.cs" />
     <Compile Include="Platform\BaseSelect.cs" />

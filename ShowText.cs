@@ -50,7 +50,7 @@ namespace BaseMacro
         public void Update()
         {
             // 每帧更新 AudioDSPManager
-            AudioDSPManager.Update();
+            DSPTimeSimulater.Update();
         }
         public void OnGUI()
         {
