@@ -94,6 +94,9 @@ namespace BaseMacro.Macro
         private const uint KEYEVENTF_KEYDOWN = 0;
         private const uint KEYEVENTF_KEYUP = 2;
 
+        [ThreadStatic]
+        private static SkyHookSystem.INPUT _cachedInput;
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint SendInput(uint nInputs, IntPtr pInputs, int cbSize);
 
@@ -431,13 +434,14 @@ namespace BaseMacro.Macro
             }
             else
             {
-                int inputSize = sizeof(SkyHookSystem.INPUT);
-                SkyHookSystem.INPUT* ptr = stackalloc SkyHookSystem.INPUT[1];
-                ptr->type = INPUT_KEYBOARD;
-                ptr->u.ki.wVk = keyCode;
-                ptr->u.ki.wScan = scanCodeCache[keyCode];
-                ptr->u.ki.dwFlags = isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
-                SendInput(1, (IntPtr)ptr, inputSize);
+                _cachedInput.type = INPUT_KEYBOARD;
+                _cachedInput.u.ki.wVk = keyCode;
+                _cachedInput.u.ki.wScan = scanCodeCache[keyCode];
+                _cachedInput.u.ki.dwFlags = isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
+
+                fixed (SkyHookSystem.INPUT* ptr = &_cachedInput)
+                    SendInput(1, (IntPtr)ptr, sizeof(SkyHookSystem.INPUT));
+
                 Log($"[Macro-Worker] SendInput key=0x{keyCode:X2} down={isDown}");
             }
         }
