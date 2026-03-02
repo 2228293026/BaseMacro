@@ -282,8 +282,6 @@ namespace BaseMacro.Macro
             if (_frameSignal.CurrentCount == 0)
                 _frameSignal.Release();
 
-            ApplyHoldBehavior(controller);
-
             Log($"[Macro-Main] 快照已发布 time={currentTime:F6}s lastFloor={lastFloor}");
         }
 
