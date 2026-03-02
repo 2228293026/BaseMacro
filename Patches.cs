@@ -16,8 +16,8 @@ namespace BaseMacro
         [HarmonyPatch(typeof(scrController), "PlayerControl_Update")]
         public static class Patch_PlayerControl_Update
         {
-            [HarmonyPostfix]
-            public static void Postfix(scrController __instance)
+            [HarmonyPrefix]
+            public static void Prefix(scrController __instance)
             {
                 Macro.Macro.Update(__instance);
                 Macro.Macro.HandleInput();
