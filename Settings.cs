@@ -141,6 +141,19 @@ namespace BaseMacro
             }
         }
 
+        private int _inputMode = 0; // 默认 Auto
+        public int InputMode
+        {
+            get => _inputMode;
+            set
+            {
+                if (_inputMode == value) return;
+                _inputMode = value;
+                // 通知 DLL 切换模式
+                if (BaseMacro.Macro.InputSystem.IsInitialized)
+                    BaseMacro.Macro.InputSystem.SetInputMode((Macro.InputMode)value);
+            }
+        }
         public void OnGUI(UnityModManager.ModEntry modEntry)
         {
             UIUtils.InitializeStyles();
@@ -295,13 +308,112 @@ namespace BaseMacro
             if (SimulateKeyPress)
             {
                 GUILayout.Space(2);
-                string skyHook = UseChinese ? "使用SkyHook输入(关闭则使用Win API)" : "Use SkyHook(If closed, use Win API)";
+                string skyHook = UseChinese ? "使用SkyHook输入(否则使用SendInput API)" : "Use SkyHook (if closed, use SendInput API)";
                 SkyHookMode = UIUtils.M3Switch(SkyHookMode, skyHook);
+
+                // ── 仅在 SkyHook 开启时显示输入模式选择 ──────────────
+                if (SkyHookMode)
+                {
+                    GUILayout.Space(6);
+
+                    // 分隔线
+                    Color originalColor = GUI.color;
+                    GUI.color = new Color(0.5f, 0.5f, 0.5f, 0.3f);
+                    GUILayout.Box("", GUILayout.Height(1), GUILayout.ExpandWidth(true));
+                    GUI.color = originalColor;
+
+                    GUILayout.Space(4);
+
+                    // 标题 + 当前生效模式
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label(
+                        UseChinese ? "Win API 输入模式" : "Win API Input Mode",
+                        UIUtils.LabelStyle, GUILayout.Width(150));
+
+                    // 当前实际生效模式（只读提示）
+                    if (BaseMacro.Macro.InputSystem.IsInitialized)
+                    {
+                        var actual = BaseMacro.Macro.InputSystem.GetInputMode();
+                        GUIStyle hintStyle = new(UIUtils.LabelStyle);
+                        hintStyle.normal.textColor = new Color(0.5f, 0.9f, 0.5f, 0.8f);
+                        hintStyle.fontSize = 10;
+                        string actualLabel = UseChinese
+                            ? $"[实际: {GetModeLabel(actual, true)}]"
+                            : $"[Active: {GetModeLabel(actual, false)}]";
+                        GUILayout.Label(actualLabel, hintStyle);
+                    }
+                    GUILayout.EndHorizontal();
+
+                    GUILayout.Space(4);
+
+                    // 可用模式检测
+                    bool hasInject = !BaseMacro.Macro.InputSystem.IsInitialized || BaseMacro.Macro.InputSystem.IsModeAvailable(BaseMacro.Macro.InputMode.NtUserInjectKeyboard);
+                    bool hasNtSend = !BaseMacro.Macro.InputSystem.IsInitialized || BaseMacro.Macro.InputSystem.IsModeAvailable(BaseMacro.Macro.InputMode.NtUserSendInput);
+
+                    // 模式按钮组
+                    string[] modeLabels = UseChinese
+                        ? ["自动", "NtInject", "NtSendInput ★", "SendInput"]
+                        : ["Auto", "NtInject", "NtSendInput ★", "SendInput"];
+
+                    // 不可用的模式置灰
+                    GUILayout.BeginHorizontal();
+                    for (int i = 0; i < 4; i++)
+                    {
+                        bool available = i switch
+                        {
+                            1 => hasInject,
+                            2 => hasNtSend,
+                            _ => true
+                        };
+                        string label = modeLabels[i];
+                        if (!available)
+                            label += UseChinese ? "(不支持)" : "(N/A)";
+
+                        bool clicked = GUILayout.Button(label, UIUtils.ButtonStyle, GUILayout.Height(24));
+                        if (clicked && available && InputMode != i)
+                            InputMode = i;
+                    }
+                    GUILayout.EndHorizontal();
+
+                    // 模式说明
+                    GUILayout.Space(4);
+                    GUIStyle descStyle = new(UIUtils.LabelStyle);
+                    descStyle.normal.textColor = new Color(0.75f, 0.75f, 0.75f, 0.8f);
+                    descStyle.fontSize = 10;
+                    descStyle.wordWrap = true;
+
+                    string desc = InputMode switch
+                    {
+                        0 => UseChinese
+                            ? "自动：优先使用最底层可用方式"
+                            : "Auto: use the lowest available layer automatically",
+                        1 => UseChinese
+                            ? "NtInject （最底层）：直接注入原始输入流，绕过用户层检测"
+                            : "NtInject  (deepest): inject into raw input stream, bypasses user-mode filters",
+                        2 => UseChinese
+                            ? "NtSendInput ★：内核边界注入，比 SendInput 底层"
+                            : "NtSendInput ★: kernel-boundary injection, lower than SendInput",
+                        3 => UseChinese
+                            ? "SendInput：标准 Win32 API，兼容性最佳"
+                            : "SendInput: standard Win32 API, best compatibility",
+                        _ => ""
+                    };
+                    GUILayout.Label(desc, descStyle);
+                }
             }
 
             GUILayout.EndVertical();
         }
 
+        // ── 模式名称辅助 ──────────────────────────────────────────
+        private string GetModeLabel(Macro.InputMode mode, bool chinese) => mode switch
+        {
+            BaseMacro.Macro.InputMode.Auto => chinese ? "自动" : "Auto",
+            BaseMacro.Macro.InputMode.NtUserInjectKeyboard => chinese ? "NtInject" : "NtInject",
+            BaseMacro.Macro.InputMode.NtUserSendInput => chinese ? "NtSendInput ★" : "NtSendInput ★",
+            BaseMacro.Macro.InputMode.SendInput => chinese ? "SendInput" : "SendInput",
+            _ => mode.ToString()
+        };
         private void DrawAuthorCard()
         {
             GUILayout.BeginVertical(UIUtils.CardStyle);
