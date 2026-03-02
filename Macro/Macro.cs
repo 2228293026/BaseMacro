@@ -629,7 +629,7 @@ namespace BaseMacro.Macro
 
         public static void HandleInput()
         {
-            if (!Main.Settings.Macro) return;
+            if (!Main.Settings.Macro || ADOBase.sceneName == GCNS.sceneLevelSelect || ADOBase.controller.paused) return;
             bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
 
             if (ctrl && Main.Settings.EnableKeyAdjust)
