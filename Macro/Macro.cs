@@ -1,6 +1,5 @@
 ﻿using BaseMacro;
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -11,58 +10,96 @@ using UnityEngine;
 
 namespace BaseMacro.Macro
 {
-
+#pragma warning disable CS0420 // 对可变字段的引用不被视为可变字段
     #region TimeBasedMacro
 
     /// <summary>
-    /// 支持 SkyHook - 性能优化版
+    /// 多线程版本：主线程仅更新 Unity 组件，工作线程处理触发逻辑与按键发送。
     /// </summary>
     internal static class Macro
     {
-        // 原始字段
-        private static double[]? triggerTimes;
-        private static int lastTriggeredFloor = -1;
-        private static int floorCount;
-        private static bool initialized = false;
+        // ─────────────────────────────────────────────
+        //  主线程专属数据（只在主线程读写）
+        // ─────────────────────────────────────────────
         private static scrLevelMaker? levelMaker;
         private static scrConductor? conductor;
         private static List<scrFloor>? cachedFloors;
-        private static readonly List<byte> keyCodes = new(4);
-        private static int keyIndex = 0;
-        private static byte? pendingKey = null;
-        private static bool isKeyDown = false;
+        private static bool initialized = false;
         private static string lastKeysSetting = "";
+        private static readonly List<byte> keyCodes = new(4);
 
-        // 扫描码缓存 - 预填充
-        private static readonly byte[] scanCodeCache = new byte[256];
+        // ─────────────────────────────────────────────
+        //  只读共享数据（初始化后不可变，无需锁）
+        // ─────────────────────────────────────────────
+        private static double[]? triggerTimes;
+        private static int floorCount;
 
-        // 原始 SendInput 相关
-        private struct KeyEvent
+        // ─────────────────────────────────────────────
+        //  帧快照（主线程写，工作线程读）
+        // ─────────────────────────────────────────────
+        /// <summary>
+        /// 主线程每帧写入，工作线程消费。使用 volatile 保证可见性。
+        /// struct 整体通过 Interlocked 交换，避免撕裂读写。
+        /// </summary>
+        private sealed class FrameSnapshot
         {
-            public byte keyCode;
-            public bool isDown;
-            public void Reset() { keyCode = 0; isDown = false; }
+            public double currentTime;
+            public double nextFrameTime;
+            public double timeOffset;
+            public bool simulateKeyPress;
+            public int lastTriggeredFloor;   // 主线程上一帧的值，用于工作线程初始定位
+            public double[]? triggerTimes;    // 共享只读引用
+            public List<scrFloor>? floors;    // 共享只读引用（帧内不变）
+            public byte[] keyCodesSnapshot;   // keyCodes 快照（避免并发修改）
+            public int keyIndexSnapshot;
+            public bool valid;
+            public FrameSnapshot() { keyCodesSnapshot = []; }
         }
 
-        private static KeyEvent[] pendingKeyEvents = new KeyEvent[32];
-        private static int pendingKeyCount = 0;
+        // 双缓冲快照：主线程写 _writing，工作线程交换后读
+        private static FrameSnapshot _snapshotA = new();
+        private static FrameSnapshot _snapshotB = new();
+        private static volatile FrameSnapshot _pendingSnapshot = new(); // 工作线程读这个
 
+        // ─────────────────────────────────────────────
+        //  工作线程 → 主线程的结果反馈
+        // ─────────────────────────────────────────────
+        private static volatile int _workerLastTriggeredFloor = -1;
+        private static volatile int _workerKeyIndex = 0;
+        private static volatile bool _workerNeedsHit = false; // 非模拟按键模式下通知主线程调用 Hit()
+
+        // ─────────────────────────────────────────────
+        //  工作线程控制
+        // ─────────────────────────────────────────────
+        private static Thread? _workerThread;
+        private static volatile bool _workerRunning = false;
+        private static readonly SemaphoreSlim _frameSignal = new(0, 1);
+
+        // ─────────────────────────────────────────────
+        //  按键状态（仅工作线程访问）
+        // ─────────────────────────────────────────────
+        private static byte? _pendingKey;
+        private static bool _isKeyDown;
+
+        // ─────────────────────────────────────────────
+        //  SkyHook 相关
+        // ─────────────────────────────────────────────
+        private static long startTimeTicks;
+        private static volatile bool skyHookInitialized = false;
+
+        // ─────────────────────────────────────────────
+        //  Win32 / SendInput
+        // ─────────────────────────────────────────────
         private const uint INPUT_KEYBOARD = 1;
         private const uint KEYEVENTF_KEYDOWN = 0;
         private const uint KEYEVENTF_KEYUP = 2;
 
-        // 使用 IntPtr 版本的 SendInput 以获得更好的性能
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint SendInput(uint nInputs, IntPtr pInputs, int cbSize);
 
         [DllImport("user32.dll")]
         private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
-        // SkyHook 模式相关
-        private static long startTimeTicks;
-        private static bool skyHookInitialized = false;
-
-        // 高精度计时器
         [DllImport("Kernel32.dll")]
         private static extern bool QueryPerformanceCounter(out long lpPerformanceCount);
 
@@ -70,9 +107,9 @@ namespace BaseMacro.Macro
         private static extern bool QueryPerformanceFrequency(out long lpFrequency);
 
         private static readonly long perfFrequency;
-        private static readonly bool usePerfCounter = false;
+        private static readonly bool usePerfCounter;
+        private static readonly byte[] scanCodeCache = new byte[256];
 
-        // 键名映射表
         private static readonly Dictionary<string, byte> KeyNameToCode = new()
         {
             ["A"] = 0x41,
@@ -152,69 +189,260 @@ namespace BaseMacro.Macro
             ["PAGEDOWN"] = 0x22
         };
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // ─────────────────────────────────────────────
+        //  静态构造
+        // ─────────────────────────────────────────────
         static Macro()
         {
             usePerfCounter = QueryPerformanceFrequency(out perfFrequency);
-
-            // 预热扫描码缓存
             for (int i = 0; i < 256; i++)
-            {
                 scanCodeCache[i] = (byte)MapVirtualKey((uint)i, 0);
-            }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static long GetAudioSyncTicks()
+        // ═══════════════════════════════════════════════════════════════
+        //  主线程入口
+        // ═══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// [主线程] 每帧由 Unity Update 调用。只访问 Unity 组件。
+        /// </summary>
+        public static void Update(scrController controller)
         {
-            if (Main.Settings.HighPrecisionTime)
+            var settings = Main.Settings;
+
+            // ── 快速失败 ────────────────────────────────────────
+            if (!settings.Macro || controller?.paused != false ||
+                ADOBase.sceneName == GCNS.sceneLevelSelect)
             {
-                return DSPTimeSimulater.GetDSPTimeAsFileTime();
+                StopWorkerIfNeeded();
+                return;
             }
-            return GetPreciseTicks();
+
+            // ── 工作线程启动 ────────────────────────────────────
+            EnsureWorkerRunning();
+
+            // ── 模式切换 ────────────────────────────────────────
+            if (settings.SkyHookMode != skyHookInitialized)
+                SwitchMode(settings.SkyHookMode);
+
+            // ── 初始化 / 重初始化 ───────────────────────────────
+            if (!initialized)
+            {
+                Initialize();
+                if (!initialized) return;
+            }
+            else if (NeedReinitialize())
+            {
+                ResetState(controller);
+                Initialize();
+                if (!initialized) return;
+            }
+
+            // ── 读取主线程上一帧工作线程的反馈 ─────────────────
+            int lastFloor = Volatile.Read(ref _workerLastTriggeredFloor);
+            int keyIdx = Volatile.Read(ref _workerKeyIndex);
+
+            // 非模拟按键模式：工作线程通知主线程调用 Hit()
+            if (Interlocked.Exchange(ref Unsafe.As<bool, int>(ref _workerNeedsHit), 0) != 0)
+            {
+                controller!.Hit(false);
+                Log("[Macro-Main] controller.Hit() 已调用");
+            }
+
+            // ── 构造帧快照并发布给工作线程 ──────────────────────
+            double currentTime = conductor!.songposition_minusi;
+            float pitch = conductor.song.pitch;
+            double nextFrameTime = currentTime + Time.unscaledDeltaTime * pitch;
+
+            // 轮流使用 A/B 两个快照对象，避免 GC
+            var snap = ReferenceEquals(_pendingSnapshot, _snapshotA) ? _snapshotB : _snapshotA;
+            snap.currentTime = currentTime;
+            snap.nextFrameTime = nextFrameTime;
+            snap.timeOffset = settings.TimeOffset * 0.001;
+            snap.simulateKeyPress = settings.SimulateKeyPress;
+            snap.lastTriggeredFloor = lastFloor;
+            snap.triggerTimes = triggerTimes;
+            snap.floors = cachedFloors;
+            snap.keyIndexSnapshot = keyIdx;
+            snap.valid = true;
+
+            // keyCodes 快照（长度一般 ≤4，廉价）
+            if (snap.keyCodesSnapshot.Length != keyCodes.Count)
+                snap.keyCodesSnapshot = new byte[keyCodes.Count];
+            keyCodes.CopyTo(snap.keyCodesSnapshot, 0);
+
+            // 发布快照（volatile 写，工作线程 volatile 读）
+            Volatile.Write(ref _pendingSnapshot, snap);
+
+            // 信号工作线程开始处理（最多持有 1 个信号，不阻塞主线程）
+            if (_frameSignal.CurrentCount == 0)
+                _frameSignal.Release();
+
+            ApplyHoldBehavior(controller);
+
+            Log($"[Macro-Main] 快照已发布 time={currentTime:F6}s lastFloor={lastFloor}");
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static long GetPreciseTicks()
+        // ═══════════════════════════════════════════════════════════════
+        //  工作线程
+        // ═══════════════════════════════════════════════════════════════
+
+        private static void WorkerLoop()
         {
-            if (usePerfCounter && QueryPerformanceCounter(out long counter))
+            Log("[Macro-Worker] 工作线程启动");
+
+            while (_workerRunning)
             {
-                return (counter * 10000000) / perfFrequency;
+                // 等待主线程信号（最多 100ms，避免永久阻塞）
+                bool got = _frameSignal.Wait(100);
+                if (!got || !_workerRunning) continue;
+
+                var snap = Volatile.Read(ref _pendingSnapshot);
+                if (!snap.valid) continue;
+
+                ProcessSnapshot(snap);
             }
-            return DateTime.UtcNow.Ticks;
+
+            // 退出前释放按键
+            WorkerReleaseKey();
+            Log("[Macro-Worker] 工作线程退出");
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ParseKeyCodes()
+        /// <summary>
+        /// [工作线程] 根据快照判断需要触发哪些地板，发送按键事件。
+        /// </summary>
+        private static void ProcessSnapshot(FrameSnapshot snap)
         {
-            string keysSetting = Main.Settings.MacroKeys ?? "J";
-            if (keysSetting == lastKeysSetting && keyCodes.Count > 0) return;
+            var times = snap.triggerTimes;
+            var floors = snap.floors;
+            if (times == null || floors == null) return;
 
-            lastKeysSetting = keysSetting;
-            keyCodes.Clear();
+            double nextFrameTime = snap.nextFrameTime;
+            double timeOffset = snap.timeOffset;
+            bool simulateKey = snap.simulateKeyPress;
+            int triggerCount = times.Length;
+            byte[] keys = snap.keyCodesSnapshot;
+            int ki = snap.keyIndexSnapshot;
 
-            string[] parts = keysSetting.Split([','], StringSplitOptions.RemoveEmptyEntries);
-            foreach (string part in parts)
+            int lastFloor = snap.lastTriggeredFloor;
+            int startFloor = lastFloor + 1;
+            bool hitNeeded = false;
+
+            for (int i = startFloor; i < triggerCount; i++)
             {
-                string keyName = part.Trim().ToUpperInvariant();
-                if (string.IsNullOrEmpty(keyName)) continue;
+                var floor = floors[i];
+                if (floor == null) continue;
 
-                if (keyName.Length == 1)
+                // 跳过自动/中旋
+                if (floor.nextfloor?.auto == true || floor.midSpin)
                 {
-                    char c = keyName[0];
-                    if (c >= 'A' && c <= 'Z') { keyCodes.Add((byte)c); continue; }
-                    if (c >= '0' && c <= '9') { keyCodes.Add((byte)c); continue; }
+                    lastFloor = i;
+                    continue;
                 }
 
-                if (KeyNameToCode.TryGetValue(keyName, out byte code))
+                double adjustedTrigger = times[i] + timeOffset;
+                if (adjustedTrigger > nextFrameTime) break;
+                if (i <= lastFloor) continue;
+
+                // 检测 hold 释放模式
+                bool releaseOnly = false;
+                if (simulateKey && floor.holdLength > -1 && i + 1 < triggerCount)
                 {
-                    keyCodes.Add(code);
+                    var nextFloor = floors[i + 1];
+                    if (nextFloor != null && nextFloor.holdLength == -1)
+                        releaseOnly = true;
                 }
+
+                if (!simulateKey)
+                {
+                    // 通知主线程调用 controller.Hit()（Unity API 必须在主线程）
+                    hitNeeded = true;
+                    Log($"[Macro-Worker] 请求 Hit() FloorIndex={i}");
+                }
+                else if (releaseOnly)
+                {
+                    WorkerReleaseKey();
+                    if (i + 1 > lastFloor) lastFloor = i + 1;
+                }
+                else if (keys.Length > 0)
+                {
+                    byte key = keys[ki % keys.Length];
+                    WorkerPressKey(key);
+                    ki = (ki + 1) % keys.Length;
+                    Log($"[Macro-Worker] 按下 0x{key:X2} FloorIndex={i}");
+                }
+
+                lastFloor = i;
             }
 
-            if (keyCodes.Count == 0) keyCodes.Add(0x4A);
-            keyIndex = 0;
+            // 末尾强制释放
+            if (_isKeyDown && lastFloor >= triggerCount - 1)
+                WorkerReleaseKey();
+
+            // 回写结果给主线程
+            Volatile.Write(ref _workerLastTriggeredFloor, lastFloor);
+            Volatile.Write(ref _workerKeyIndex, ki);
+            if (hitNeeded)
+                Volatile.Write(ref Unsafe.As<bool, int>(ref _workerNeedsHit), 1);
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        //  工作线程 - 按键操作
+        // ═══════════════════════════════════════════════════════════════
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WorkerPressKey(byte keyCode)
+        {
+            // 先松开旧键（如有）
+            if (_isKeyDown && _pendingKey.HasValue && _pendingKey.Value != keyCode)
+                WorkerReleaseKey();
+
+            if (!_isKeyDown)
+            {
+                SendKey(keyCode, isDown: true);
+                _pendingKey = keyCode;
+                _isKeyDown = true;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WorkerReleaseKey()
+        {
+            if (_isKeyDown && _pendingKey.HasValue)
+            {
+                SendKey(_pendingKey.Value, isDown: false);
+                _pendingKey = null;
+                _isKeyDown = false;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static unsafe void SendKey(byte keyCode, bool isDown)
+        {
+            if (Main.Settings.SkyHookMode)
+            {
+                long now = GetAudioSyncTicks();
+                long elapsed = now - startTimeTicks;
+                var evt = SkyHookSystem.SkyHookEvent.Create(keyCode, isDown, elapsed);
+                AsyncInputManager.EnqueueEvent(evt);
+                Log($"[Macro-Worker] SkyHook key=0x{keyCode:X2} down={isDown}");
+            }
+            else
+            {
+                int inputSize = sizeof(SkyHookSystem.INPUT);
+                SkyHookSystem.INPUT* ptr = stackalloc SkyHookSystem.INPUT[1];
+                ptr->type = INPUT_KEYBOARD;
+                ptr->u.ki.wVk = keyCode;
+                ptr->u.ki.wScan = scanCodeCache[keyCode];
+                ptr->u.ki.dwFlags = isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
+                SendInput(1, (IntPtr)ptr, inputSize);
+                Log($"[Macro-Worker] SendInput key=0x{keyCode:X2} down={isDown}");
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        //  主线程辅助方法（只调用 Unity API）
+        // ═══════════════════════════════════════════════════════════════
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void Initialize()
@@ -227,36 +455,36 @@ namespace BaseMacro.Macro
             triggerTimes = new double[floorCount];
 
             for (int i = 0; i < floorCount - 1; i++)
-            {
                 triggerTimes[i] = cachedFloors[i + 1]?.entryTime ?? double.MaxValue;
-            }
             triggerTimes[floorCount - 1] = double.MaxValue;
 
             conductor = scrConductor.instance;
+            ParseKeyCodes();
             initialized = true;
 
-            ParseKeyCodes();
+            // 同步工作线程状态
+            int syncFloor = SyncFloor(conductor!.songposition_minusi);
+            Volatile.Write(ref _workerLastTriggeredFloor, syncFloor);
+            Volatile.Write(ref _workerKeyIndex, 0);
+            if (Main.Settings.SkyHookMode)
+                startTimeTicks = GetAudioSyncTicks();
 
-            if (conductor != null)
-            {
-                SyncLastTriggeredFloor(conductor.songposition_minusi);
-            }
+            Log("[Macro-Main] 初始化完成");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void SyncLastTriggeredFloor(double currentTime)
+        private static int SyncFloor(double currentTime)
         {
-            if (triggerTimes == null || triggerTimes.Length == 0) return;
-
+            if (triggerTimes == null || triggerTimes.Length == 0) return -1;
             int left = 0, right = triggerTimes.Length - 1;
             while (left <= right)
             {
                 int mid = (left + right) >> 1;
                 if (triggerTimes[mid] < currentTime) left = mid + 1;
                 else if (triggerTimes[mid] > currentTime) right = mid - 1;
-                else { lastTriggeredFloor = mid; return; }
+                else return mid;
             }
-            lastTriggeredFloor = left - 1;
+            return left - 1;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -267,456 +495,167 @@ namespace BaseMacro.Macro
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void QueueSendInputEvent(byte keyCode, bool isDown)
+        private static void ParseKeyCodes()
         {
-            if (pendingKeyCount >= pendingKeyEvents.Length)
+            string keysSetting = Main.Settings.MacroKeys ?? "J";
+            if (keysSetting == lastKeysSetting && keyCodes.Count > 0) return;
+
+            lastKeysSetting = keysSetting;
+            keyCodes.Clear();
+
+            foreach (string part in keysSetting.Split([','], StringSplitOptions.RemoveEmptyEntries))
             {
-                var newArray = new KeyEvent[pendingKeyEvents.Length * 2];
-                Array.Copy(pendingKeyEvents, newArray, pendingKeyEvents.Length);
-                pendingKeyEvents = newArray;
+                string keyName = part.Trim().ToUpperInvariant();
+                if (string.IsNullOrEmpty(keyName)) continue;
+                if (keyName.Length == 1)
+                {
+                    char c = keyName[0];
+                    if (c is >= 'A' and <= 'Z') { keyCodes.Add((byte)c); continue; }
+                    if (c is >= '0' and <= '9') { keyCodes.Add((byte)c); continue; }
+                }
+                if (KeyNameToCode.TryGetValue(keyName, out byte code))
+                    keyCodes.Add(code);
             }
-            pendingKeyEvents[pendingKeyCount].keyCode = keyCode;
-            pendingKeyEvents[pendingKeyCount].isDown = isDown;
-            pendingKeyCount++;
-        }
-
-        /// <summary>
-        /// 高性能 SendInput 发送（优化版）
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-
-        private static unsafe void FlushSendInputEvents()
-        {
-            if (pendingKeyCount == 0) return;
-
-            int inputSize = sizeof(SkyHookSystem.INPUT); // 使用 sizeof 替代 Marshal.SizeOf
-            int totalSize = inputSize * pendingKeyCount;
-
-            if (pendingKeyCount <= 32)
-            {
-                SkyHookSystem.INPUT* inputsPtr = stackalloc SkyHookSystem.INPUT[pendingKeyCount];
-                var span = new Span<SkyHookSystem.INPUT>(inputsPtr, pendingKeyCount);
-
-                for (int i = 0; i < pendingKeyCount; i++)
-                {
-                    ref var evt = ref pendingKeyEvents[i];
-                    ref var input = ref span[i];
-
-                    input.type = INPUT_KEYBOARD;
-                    input.u.ki.wVk = evt.keyCode;
-                    input.u.ki.wScan = scanCodeCache[evt.keyCode];
-                    input.u.ki.dwFlags = evt.isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
-                }
-
-                SendInput((uint)pendingKeyCount, (IntPtr)inputsPtr, inputSize);
-            }
-            else
-            {
-                IntPtr inputsPtr = Marshal.AllocHGlobal(totalSize);
-                try
-                {
-                    var span = new Span<SkyHookSystem.INPUT>((void*)inputsPtr, pendingKeyCount);
-
-                    for (int i = 0; i < pendingKeyCount; i++)
-                    {
-                        ref var evt = ref pendingKeyEvents[i];
-                        ref var input = ref span[i];
-
-                        input.type = INPUT_KEYBOARD;
-                        input.u.ki.wVk = evt.keyCode;
-                        input.u.ki.wScan = scanCodeCache[evt.keyCode];
-                        input.u.ki.dwFlags = evt.isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
-                    }
-
-                    SendInput((uint)pendingKeyCount, inputsPtr, inputSize);
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(inputsPtr);
-                }
-            }
-
-            pendingKeyCount = 0;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void UpdateKeyState(byte? newKey)
-        {
-            // 如果有按下的键，需要先松开
-            if (isKeyDown && pendingKey.HasValue)
-            {
-                // 如果新按键为null（纯松开），或者切换到不同按键
-                if (!newKey.HasValue || newKey.Value != pendingKey.Value)
-                {
-                    Log($"[TimeBasedMacro] UpdateKeyState: 松开按键 0x{pendingKey.Value:X2}");
-
-                    if (Main.Settings.SkyHookMode)
-                    {
-                        long now = GetAudioSyncTicks();
-                        long elapsed = now - startTimeTicks;
-                        var evt = SkyHookSystem.SkyHookEvent.Create(pendingKey.Value, false, elapsed);
-                        AsyncInputManager.EnqueueEvent(evt);
-                        Log($"[TimeBasedMacro] SkyHook松开已入队: Key=0x{pendingKey.Value:X2}");
-                    }
-                    else
-                    {
-                        QueueSendInputEvent(pendingKey.Value, false);
-                    }
-
-                    isKeyDown = false;
-                    pendingKey = null;
-                }
-            }
-
-            // 按下新按键
-            if (newKey.HasValue && (!isKeyDown || newKey.Value != pendingKey))
-            {
-                Log($"[TimeBasedMacro] UpdateKeyState: 按下按键 0x{newKey.Value:X2}");
-
-                if (Main.Settings.SkyHookMode)
-                {
-                    long now = GetAudioSyncTicks();
-                    long elapsed = now - startTimeTicks;
-                    var evt = SkyHookSystem.SkyHookEvent.Create(newKey.Value, true, elapsed);
-                    AsyncInputManager.EnqueueEvent(evt);
-                    Log($"[TimeBasedMacro] SkyHook按下已入队: Key=0x{newKey.Value:X2}");
-                }
-                else
-                {
-                    QueueSendInputEvent(newKey.Value, true);
-                }
-
-                pendingKey = newKey;
-                isKeyDown = true;
-            }
+            if (keyCodes.Count == 0) keyCodes.Add(0x4A);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void ApplyHoldBehavior(scrController controller)
         {
-            if (controller == null) return;
-
-            if (Main.Settings.Macro)
-            {
-                controller.requireHolding = Persistence.holdBehavior < HoldBehavior.NoHoldNeeded;
-                if (!Main.Settings.SimulateKeyPress)
-                {
-                    controller.requireHolding = false;
-                    Log($"[TimeBasedMacro] 强制设置 requireHolding = false");
-                }
-            }
+            if (controller == null || !Main.Settings.Macro) return;
+            controller.requireHolding = Main.Settings.SimulateKeyPress &&
+                                        Persistence.holdBehavior < HoldBehavior.NoHoldNeeded;
+            if (!Main.Settings.SimulateKeyPress)
+                controller.requireHolding = false;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void Reset(scrController controller)
+        // ═══════════════════════════════════════════════════════════════
+        //  生命周期管理
+        // ═══════════════════════════════════════════════════════════════
+
+        public static void Reset(scrController controller) => ResetState(controller);
+
+        private static void ResetState(scrController? controller)
         {
-            lastTriggeredFloor = -1;
             initialized = false;
             triggerTimes = null;
             cachedFloors = null;
             levelMaker = null;
             conductor = null;
 
-            if (isKeyDown && pendingKey.HasValue)
-            {
-                UpdateKeyState(null);
-                if (!Main.Settings.SkyHookMode && pendingKeyCount > 0)
-                {
-                    FlushSendInputEvents();
-                }
-            }
-            pendingKey = null;
-            isKeyDown = false;
-            keyIndex = 0;
-
-            if (pendingKeyCount > 0)
-            {
-                Array.Clear(pendingKeyEvents, 0, pendingKeyCount);
-                pendingKeyCount = 0;
-            }
+            Volatile.Write(ref _workerLastTriggeredFloor, -1);
+            Volatile.Write(ref _workerKeyIndex, 0);
+            // 工作线程在 ProcessSnapshot 时会自行处理释放
 
             AsyncInputManager.ClearQueue();
 
             if (Main.Settings.SkyHookMode)
-            {
                 startTimeTicks = GetAudioSyncTicks();
-            }
-            ApplyHoldBehavior(controller);
+
+            if (controller != null)
+                ApplyHoldBehavior(controller);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void Update(scrController controller)
+        private static void EnsureWorkerRunning()
         {
-            var settings = Main.Settings;
+            if (_workerRunning && _workerThread?.IsAlive == true) return;
 
-            // 快速失败检查
-            if (!settings.Macro || controller?.paused != false ||
-                ADOBase.sceneName == GCNS.sceneLevelSelect)
+            _workerRunning = true;
+            _workerThread = new Thread(WorkerLoop)
             {
-                if (skyHookInitialized)
-                {
-                    AsyncInputManager.Stop();
-                    skyHookInitialized = false;
-                    Log("[Macro] SkyHook模式已停止 - 场景切换或暂停");
-                }
-                return;
-            }
-
-            // 模式切换检查
-            if (settings.SkyHookMode != skyHookInitialized)
-            {
-                Log($"[Macro] 模式切换: SkyHookMode={settings.SkyHookMode}, 当前状态={skyHookInitialized}");
-                SwitchMode(settings.SkyHookMode);
-            }
-
-            // 初始化检查
-            if (!initialized)
-            {
-                Log("[Macro] 开始初始化...");
-                Initialize();
-                if (!initialized)
-                {
-                    Log("[Macro] 初始化失败");
-                    return;
-                }
-                Log("[Macro] 初始化完成");
-            }
-            else if (NeedReinitialize())
-            {
-                Log("[Macro] 检测到需要重新初始化");
-                Reset(controller);
-                Initialize();
-                if (!initialized)
-                {
-                    Log("[Macro] 重新初始化失败");
-                    return;
-                }
-                Log("[Macro] 重新初始化完成");
-            }
-
-            // 缓存局部变量
-            var cond = conductor;
-            var floors = cachedFloors;
-            var times = triggerTimes;
-            if (cond == null || floors == null || times == null)
-            {
-                Log($"[Macro] 数据无效: cond={cond != null}, floors={floors != null}, times={times != null}");
-                return;
-            }
-
-            // 预计算常用值
-            double currentTime = cond.songposition_minusi;
-            double unscaledDeltaTime = Time.unscaledDeltaTime;
-            float pitch = cond.song.pitch;
-            double nextFrameTime = currentTime + (unscaledDeltaTime * pitch);
-            double timeOffset = settings.TimeOffset * 0.001;
-            bool simulateKeyPress = settings.SimulateKeyPress;
-
-            // 时间计算日志
-            Log($"[Macro] 时间计算 - 当前时间: {currentTime:F6}s, DeltaTime: {unscaledDeltaTime:F6}s, 曲速: {pitch:F3}, 下一帧时间: {nextFrameTime:F6}s, 偏移量: {timeOffset:F6}s");
-
-            int startFloor = lastTriggeredFloor + 1;
-            int triggerCount = times.Length;
-
-            int nextFloorIndex = lastTriggeredFloor + 1;
-
-            if (nextFloorIndex < times.Length)
-            {
-                double nextTriggerTime = times[nextFloorIndex] + timeOffset;
-                double timeUntilNextTrigger = nextTriggerTime - currentTime;
-
-                Log($"[Macro] === 帧开始 ===");
-                Log($"[Macro] 当前时间: {currentTime:F6}s");
-                Log($"[Macro] 下一帧时间: {nextFrameTime:F6}s (Δ={unscaledDeltaTime * pitch:F6}s)");
-                Log($"[Macro] 等待地板: Index={nextFloorIndex}, 触发时间={nextTriggerTime:F6}s");
-                Log($"[Macro] 剩余等待: {timeUntilNextTrigger:F6}s");
-                Log($"[Macro] 时间窗口内: {(nextTriggerTime <= nextFrameTime ? "是" : $"否 (还需 {nextTriggerTime - nextFrameTime:F6}s)")}");
-            }
-            else
-            {
-                Log($"[Macro] 所有地板已处理完成 (lastTriggeredFloor={lastTriggeredFloor}, 总数={times.Length})");
-            }
-
-            // 主循环
-            for (int i = startFloor; i < triggerCount; i++)
-            {
-                var floor = floors[i];
-                if (floor == null) continue;
-
-                if (floor.nextfloor?.auto == true || floor.midSpin)
-                {
-                    lastTriggeredFloor = i;
-                    Log($"[Macro] 跳过自动/中旋地板: FloorIndex={i}");
-                    continue;
-                }
-
-                double adjustedTrigger = times[i] + timeOffset;
-
-                // 触发时间计算日志
-                Log($"[Macro] 触发检查 - FloorIndex={i}, 原始触发时间: {times[i]:F6}s, 调整后: {adjustedTrigger:F6}s, 下一帧时间: {nextFrameTime:F6}s");
-
-                if (adjustedTrigger > nextFrameTime)
-                {
-                    Log($"[Macro] 触发时间超出下一帧 - FloorIndex={i}, 调整后: {adjustedTrigger:F6}s > 下一帧: {nextFrameTime:F6}s");
-                    break;
-                }
-
-                if (i <= lastTriggeredFloor)
-                {
-                    Log($"[Macro] 已处理过的地板 - FloorIndex={i}, 最后触发: {lastTriggeredFloor}");
-                    continue;
-                }
-
-                bool releaseOnly = false;
-                if (simulateKeyPress && floor.holdLength > -1 && i + 1 < triggerCount)
-                {
-                    var nextFloor = floors[i + 1];
-                    if (nextFloor != null && nextFloor.holdLength == -1)
-                    {
-                        releaseOnly = true;
-                        Log($"[Macro] 检测到释放模式 - FloorIndex={i}, 当前Hold长度: {floor.holdLength}");
-                    }
-                }
-
-                if (!simulateKeyPress)
-                {
-                    controller.Hit(false);
-                    Log($"[Macro] 模拟点击 - FloorIndex={i}, 方法: controller.Hit");
-                }
-                else if (releaseOnly)
-                {
-                    if (isKeyDown && pendingKey.HasValue)
-                    {
-                        Log($"[Macro] 释放按键 - FloorIndex={i}, 当前按键: {pendingKey.Value}");
-                        UpdateKeyState(null);
-                    }
-                    if (i + 1 > lastTriggeredFloor)
-                    {
-                        lastTriggeredFloor = i + 1;
-                        Log($"[Macro] 跳过下一个地板 - 当前FloorIndex={i}, 最后触发更新为: {lastTriggeredFloor}");
-                    }
-                }
-                else if (simulateKeyPress && keyCodes.Count > 0)
-                {
-                    byte key = keyCodes[keyIndex];
-                    Log($"[Macro] 按下按键 - FloorIndex={i}, 按键代码: {key}, 索引: {keyIndex}, 总按键数: {keyCodes.Count}");
-                    UpdateKeyState(key);
-
-                    keyIndex = (keyIndex + 1) % keyCodes.Count;
-                    Log($"[Macro] 更新按键索引 - 新索引: {keyIndex}");
-                }
-
-                lastTriggeredFloor = i;
-                Log($"[Macro] 更新最后触发楼层 - FloorIndex={i}");
-            }
-
-            // 使用高性能的 FlushSendInputEvents 发送事件
-            if (!settings.SkyHookMode && pendingKeyCount > 0)
-            {
-                Log($"[Macro] 发送输入事件 - 待处理按键数: {pendingKeyCount}");
-                FlushSendInputEvents();
-            }
-
-            // 强制释放检查
-            if (isKeyDown && pendingKey.HasValue && lastTriggeredFloor >= triggerCount - 1)
-            {
-                Log($"[Macro] 强制释放按键 - 最后触发楼层: {lastTriggeredFloor}, 总楼层数: {triggerCount}, 当前按键: {pendingKey.Value}");
-                UpdateKeyState(null);
-                if (!settings.SkyHookMode && pendingKeyCount > 0)
-                {
-                    Log($"[Macro] 强制释放后发送输入事件 - 待处理按键数: {pendingKeyCount}");
-                    FlushSendInputEvents();
-                }
-            }
+                IsBackground = true,
+                Priority = System.Threading.ThreadPriority.AboveNormal,
+                Name = "MacroWorkerThread"
+            };
+            _workerThread.Start();
+            Log("[Macro-Main] 工作线程已启动");
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void StopWorkerIfNeeded()
+        {
+            if (!_workerRunning) return;
+            _workerRunning = false;
+            _frameSignal.Release(); // 唤醒线程让它退出
+
+            if (skyHookInitialized)
+            {
+                AsyncInputManager.Stop();
+                skyHookInitialized = false;
+            }
+            Log("[Macro-Main] 工作线程停止请求已发送");
+        }
+
         private static void SwitchMode(bool useSkyHook)
         {
             if (useSkyHook == skyHookInitialized) return;
-
-            Log($"[TimeBasedMacro] 切换模式: {(useSkyHook ? "SkyHook" : "SendInput")}");
+            Log($"[Macro-Main] 切换模式: {(useSkyHook ? "SkyHook" : "SendInput")}");
 
             if (useSkyHook)
             {
-                if (!skyHookInitialized)
-                {
-                    AsyncInputManager.Start();
-                    skyHookInitialized = true;
-                }
+                AsyncInputManager.Start();
+                skyHookInitialized = true;
                 startTimeTicks = GetAudioSyncTicks();
                 Main.Settings.SkyHookMode = true;
-                Log("[TimeBasedMacro] 切换到 SkyHook 模式（时间精确模式）");
             }
             else
             {
-                if (skyHookInitialized)
-                {
-                    AsyncInputManager.Stop();
-                    skyHookInitialized = false;
-                }
+                AsyncInputManager.Stop();
+                skyHookInitialized = false;
                 Main.Settings.SkyHookMode = false;
-                Log("[TimeBasedMacro] 切换到 SendInput 模式（即时模式）");
-            }
-
-            // 清理状态
-            if (isKeyDown && pendingKey.HasValue)
-            {
-                if (useSkyHook)
-                {
-                    long now = GetAudioSyncTicks();
-                    long elapsed = now - startTimeTicks;
-                    var evt = SkyHookSystem.SkyHookEvent.Create(pendingKey.Value, false, elapsed);
-                    AsyncInputManager.EnqueueEvent(evt);
-                }
-                else
-                {
-                    QueueSendInputEvent(pendingKey.Value, false);
-                    FlushSendInputEvents(); // 使用高性能版本
-                }
-                isKeyDown = false;
-                pendingKey = null;
             }
         }
 
+        // ═══════════════════════════════════════════════════════════════
+        //  计时器
+        // ═══════════════════════════════════════════════════════════════
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static long GetAudioSyncTicks() =>
+            Main.Settings.HighPrecisionTime
+                ? DSPTimeSimulater.GetDSPTimeAsFileTime()
+                : GetPreciseTicks();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static long GetPreciseTicks()
+        {
+            if (usePerfCounter && QueryPerformanceCounter(out long counter))
+                return (counter * 10000000) / perfFrequency;
+            return DateTime.UtcNow.Ticks;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        //  输入调整（主线程 HandleInput，Unity Input API）
+        // ═══════════════════════════════════════════════════════════════
+
         public static void HandleInput()
         {
             if (!Main.Settings.Macro) return;
-
             bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
 
             if (ctrl && Main.Settings.EnableKeyAdjust)
             {
                 if (Input.GetKeyDown(KeyCode.LeftArrow))
-                {
                     Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep - 0.1f, 0.1f, 10f);
-                }
                 else if (Input.GetKeyDown(KeyCode.RightArrow))
-                {
                     Main.Settings.AdjustStep = Mathf.Clamp(Main.Settings.AdjustStep + 0.1f, 0.1f, 10f);
-                }
             }
             else if (!ctrl && Main.Settings.EnableArrowTimeAdjust)
             {
                 if (Input.GetKeyDown(KeyCode.LeftArrow))
-                {
                     Main.Settings.TimeOffset -= Main.Settings.AdjustStep;
-                }
                 else if (Input.GetKeyDown(KeyCode.RightArrow))
-                {
                     Main.Settings.TimeOffset += Main.Settings.AdjustStep;
-                }
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // ═══════════════════════════════════════════════════════════════
+        //  日志（仅 DEBUG）
+        // ═══════════════════════════════════════════════════════════════
+
         [System.Diagnostics.Conditional("DEBUG")]
-        public static void Log(string message)
-        {
-            Main.Mod?.Logger.Log(message);
-        }
+        public static void Log(string message) => Main.Mod?.Logger.Log(message);
     }
 
     #endregion
+#pragma warning restore CS0420 // 对可变字段的引用不被视为可变字段
 }
