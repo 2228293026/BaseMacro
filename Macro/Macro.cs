@@ -206,6 +206,7 @@ namespace BaseMacro.Macro
         /// <summary>
         /// [主线程] 每帧由 Unity Update 调用。只访问 Unity 组件。
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Update(scrController controller)
         {
             var settings = Main.Settings;
@@ -286,7 +287,7 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  工作线程
         // ═══════════════════════════════════════════════════════════════
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WorkerLoop()
         {
             Log("[Macro-Worker] 工作线程启动");
@@ -311,6 +312,7 @@ namespace BaseMacro.Macro
         /// <summary>
         /// [工作线程] 根据快照判断需要触发哪些地板，发送按键事件。
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void ProcessSnapshot(FrameSnapshot snap)
         {
             var times = snap.triggerTimes;
@@ -532,9 +534,9 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  生命周期管理
         // ═══════════════════════════════════════════════════════════════
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Reset(scrController controller) => ResetState(controller);
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void ResetState(scrController? controller)
         {
             initialized = false;
@@ -555,7 +557,7 @@ namespace BaseMacro.Macro
             if (controller != null)
                 ApplyHoldBehavior(controller);
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void EnsureWorkerRunning()
         {
             if (_workerRunning && _workerThread?.IsAlive == true) return;
@@ -570,7 +572,7 @@ namespace BaseMacro.Macro
             _workerThread.Start();
             Log("[Macro-Main] 工作线程已启动");
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void StopWorkerIfNeeded()
         {
             if (!_workerRunning) return;
@@ -584,7 +586,7 @@ namespace BaseMacro.Macro
             }
             Log("[Macro-Main] 工作线程停止请求已发送");
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void SwitchMode(bool useSkyHook)
         {
             if (useSkyHook == skyHookInitialized) return;
@@ -626,7 +628,7 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  输入调整（主线程 HandleInput，Unity Input API）
         // ═══════════════════════════════════════════════════════════════
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void HandleInput()
         {
             if (!Main.Settings.Macro || ADOBase.sceneName == GCNS.sceneLevelSelect || ADOBase.controller.paused) return;
@@ -651,6 +653,7 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  日志（仅 DEBUG）
         // ═══════════════════════════════════════════════════════════════
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
         [System.Diagnostics.Conditional("DEBUG")]
         public static void Log(string message) => Main.Mod?.Logger.Log(message);
