@@ -195,6 +195,7 @@ namespace BaseMacro.Macro
         // ─────────────────────────────────────────────
         //  静态构造
         // ─────────────────────────────────────────────
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static Macro()
         {
             usePerfCounter = QueryPerformanceFrequency(out perfFrequency);

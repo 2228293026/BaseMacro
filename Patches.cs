@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
 using System.Threading.Tasks;
+using UnityEngine;
 
 namespace BaseMacro
 {
@@ -37,6 +38,35 @@ namespace BaseMacro
             [HarmonyPrefix]
             public static void Prefix(scrController __instance) => Macro.Macro.Reset(__instance);
         }
+
+        [HarmonyPatch(typeof(scrController), "Fail2Action")]
+        public static class Patch_FailAction
+        {
+            [HarmonyPostfix]
+            public static void Postfix()
+            {
+                if (Main.Settings.EnableDeathKey)
+                {
+                    ADOBase.controller?.StartCoroutine(DelayedSendDeathKey());
+                    ADOBase.editor?.StartCoroutine(DelayedSendDeathKey());
+                    ADOBase.customLevel?.StartCoroutine(DelayedSendDeathKey());
+                }
+            }
+
+            private static System.Collections.IEnumerator DelayedSendDeathKey()
+            {
+                // 等待设置的秒数
+                yield return new WaitForSeconds(Main.Settings.DeathKeyDelay);
+
+                if (Main.Settings.SimulateKeyPress && Main.Settings.SkyHookMode && InputSystem.IsInitialized)
+                {
+                    // 使用InputSystem发送按键
+                    InputSystem.SendKeyDirect((byte)Main.Settings.DeathKeyCode, true);
+                    InputSystem.SendKeyDirect((byte)Main.Settings.DeathKeyCode, false);
+                }
+            }
+        }
+
         [HarmonyPatch(typeof(scrConductor), "Update")]
         public static class __scrConductor
         {

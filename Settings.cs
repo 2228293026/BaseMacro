@@ -1,6 +1,7 @@
 ﻿using HarmonyLib;
 using Newgrounds;
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using UnityModManagerNet;
@@ -154,6 +155,98 @@ namespace BaseMacro
                     BaseMacro.Macro.InputSystem.SetInputMode((Macro.InputMode)value);
             }
         }
+
+        private bool _enableDeathKey = false;
+        public bool EnableDeathKey
+        {
+            get => _enableDeathKey;
+            set
+            {
+                if (_enableDeathKey == value) return;
+                _enableDeathKey = value;
+            }
+        }
+
+        private float _deathKeyDelay = 5f;
+        public float DeathKeyDelay
+        {
+            get => _deathKeyDelay;
+            set => _deathKeyDelay = Mathf.Clamp(value, 0.1f, 30f);
+        }
+
+        private int _deathKeyCode = 0x52; // 默认 R 键 (0x52)
+        public int DeathKeyCode
+        {
+            get => _deathKeyCode;
+            set => _deathKeyCode = value;
+        }
+
+        private string _deathKeyInput = "R";
+        public string DeathKeyInput
+        {
+            get => _deathKeyInput;
+            set
+            {
+                if (_deathKeyInput == value) return;
+                _deathKeyInput = value.ToUpper();
+                // 尝试转换按键代码
+                int? keyCode = GetKeyCodeFromString(_deathKeyInput);
+                if (keyCode.HasValue)
+                {
+                    _deathKeyCode = keyCode.Value;
+                }
+            }
+        }
+
+        private (string input, bool focused) _deathKeyDelayState = (string.Empty, false);
+
+        private static readonly Dictionary<string, int> KeyCodeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            // 字母键
+            {"A", 0x41}, {"B", 0x42}, {"C", 0x43}, {"D", 0x44}, {"E", 0x45}, {"F", 0x46},
+            {"G", 0x47}, {"H", 0x48}, {"I", 0x49}, {"J", 0x4A}, {"K", 0x4B}, {"L", 0x4C},
+            {"M", 0x4D}, {"N", 0x4E}, {"O", 0x4F}, {"P", 0x50}, {"Q", 0x51}, {"R", 0x52},
+            {"S", 0x53}, {"T", 0x54}, {"U", 0x55}, {"V", 0x56}, {"W", 0x57}, {"X", 0x58},
+            {"Y", 0x59}, {"Z", 0x5A},
+            
+            // 数字键
+            {"0", 0x30}, {"1", 0x31}, {"2", 0x32}, {"3", 0x33}, {"4", 0x34},
+            {"5", 0x35}, {"6", 0x36}, {"7", 0x37}, {"8", 0x38}, {"9", 0x39},
+            
+            // 功能键
+            {"F1", 0x70}, {"F2", 0x71}, {"F3", 0x72}, {"F4", 0x73}, {"F5", 0x74},
+            {"F6", 0x75}, {"F7", 0x76}, {"F8", 0x77}, {"F9", 0x78}, {"F10", 0x79},
+            {"F11", 0x7A}, {"F12", 0x7B},
+            
+            // 特殊键
+            {"SPACE", 0x20}, {"ENTER", 0x0D}, {"RETURN", 0x0D}, {"ESC", 0x1B},
+            {"TAB", 0x09}, {"SHIFT", 0x10}, {"CTRL", 0x11}, {"ALT", 0x12},
+            {"BACKSPACE", 0x08}, {"DELETE", 0x2E}, {"INSERT", 0x2D},
+            {"HOME", 0x24}, {"END", 0x23}, {"PAGEUP", 0x21}, {"PAGEDOWN", 0x22},
+            
+            // 方向键
+            {"UP", 0x26}, {"DOWN", 0x28}, {"LEFT", 0x25}, {"RIGHT", 0x27}
+        };
+
+        private int? GetKeyCodeFromString(string keyString)
+        {
+            if (string.IsNullOrEmpty(keyString))
+                return null;
+
+            // 尝试直接解析为十六进制
+            if (keyString.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(keyString.Substring(2), System.Globalization.NumberStyles.HexNumber, null, out int hexCode))
+                    return hexCode;
+            }
+
+            // 尝试从映射表获取
+            if (KeyCodeMap.TryGetValue(keyString, out int code))
+                return code;
+
+            return null;
+        }
+
         public void OnGUI(UnityModManager.ModEntry modEntry)
         {
             UIUtils.InitializeStyles();
@@ -193,6 +286,12 @@ namespace BaseMacro
                 GUILayout.Label(UseChinese ? "请先启用宏" : "Please enable Macro first",
                     UIUtils.LabelStyle);
                 GUILayout.EndVertical();
+            }
+
+            if (Macro)
+            {
+                GUILayout.Space(12);
+                DrawOtherSettingsCard();
             }
 
             GUILayout.Space(12);
@@ -291,7 +390,7 @@ namespace BaseMacro
             GUILayout.Space(2);
 
             GUILayout.BeginHorizontal();
-            string keysLabel = UseChinese ? "按键序列 (逗号分隔):" : "Keys (comma separated):";
+            string keysLabel = UseChinese ? "按键序列 (逗号分隔)" : "Keys (comma separated)";
             GUILayout.Label(keysLabel, UIUtils.LabelStyle, GUILayout.Width(180));
             MacroKeys = GUILayout.TextField(MacroKeys, UIUtils.TextFieldStyle, GUILayout.ExpandWidth(true));
             GUILayout.EndHorizontal();
@@ -414,6 +513,124 @@ namespace BaseMacro
             BaseMacro.Macro.InputMode.SendInput => chinese ? "SendInput" : "SendInput",
             _ => mode.ToString()
         };
+
+        // 在 DrawOtherSettingsCard 方法中修改
+        private void DrawOtherSettingsCard()
+        {
+            GUILayout.BeginVertical(UIUtils.CardStyle);
+            GUILayout.Label(UseChinese ? "其他选项" : "Other Settings", UIUtils.HeaderStyle);
+            GUILayout.Space(2);
+
+            // 先检查 SkyHookMode 是否开启
+            if (!SkyHookMode)
+            {
+                // 如果 SkyHook 未开启，显示提示信息
+                GUIStyle warningStyle = new(UIUtils.LabelStyle);
+                warningStyle.normal.textColor = new Color(1f, 0.7f, 0f, 0.9f);
+                warningStyle.fontSize = 11;
+                warningStyle.wordWrap = true;
+
+                string warningText = UseChinese
+                    ? "⚠️ 需要开启 SkyHook 模式才能使用死亡后自动按键功能"
+                    : "⚠️ SkyHook Mode is required for auto-press key on death";
+
+                GUILayout.Label(warningText, warningStyle);
+                EnableDeathKey = false; // 强制关闭死亡按键功能
+
+                GUILayout.EndVertical();
+                return;
+            }
+
+            // SkyHook 已开启，显示正常功能
+            string deathKeySwitchText = UseChinese
+                ? "死亡后自动按键(仅SkyHook模式)"
+                : "Auto-press key on death(Only SkyHook Mode)";
+
+            bool newEnableDeathKey = UIUtils.M3Switch(EnableDeathKey, deathKeySwitchText);
+            if (newEnableDeathKey != EnableDeathKey)
+            {
+                EnableDeathKey = newEnableDeathKey;
+            }
+
+            if (EnableDeathKey)
+            {
+                GUILayout.Space(6);
+
+                // 分隔线
+                Color originalColor = GUI.color;
+                GUI.color = new Color(0.5f, 0.5f, 0.5f, 0.3f);
+                GUILayout.Box("", GUILayout.Height(1), GUILayout.ExpandWidth(true));
+                GUI.color = originalColor;
+
+                GUILayout.Space(4);
+
+                // 延迟时间设置
+                GUILayout.BeginHorizontal();
+                DeathKeyDelay = UIUtils.M3HorizontalSliderWithLabelAndInput(
+                    UseChinese ? "延迟秒数" : "Delay (seconds)",
+                    DeathKeyDelay, 0.1f, 30f,
+                    ref _deathKeyDelayState.input, ref _deathKeyDelayState.focused, "F1", 140, 200, 60);
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(4);
+
+                // 按键选择
+                GUILayout.BeginHorizontal();
+                string keyLabel = UseChinese ? "按键" : "Key";
+                GUILayout.Label(keyLabel, UIUtils.LabelStyle, GUILayout.Width(80));
+
+                // 按键输入框
+                string newDeathKeyInput = GUILayout.TextField(DeathKeyInput, UIUtils.TextFieldStyle, GUILayout.Width(100));
+                if (newDeathKeyInput != DeathKeyInput)
+                {
+                    DeathKeyInput = newDeathKeyInput;
+                }
+
+                GUILayout.Space(10);
+
+                // 显示当前按键代码
+                GUIStyle codeStyle = new(UIUtils.LabelStyle);
+                codeStyle.normal.textColor = new Color(0.6f, 0.6f, 0.6f, 0.8f);
+                codeStyle.fontSize = 10;
+                GUILayout.Label($"0x{DeathKeyCode:X2}", codeStyle);
+
+                GUILayout.FlexibleSpace();
+
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(4);
+
+                // 常用按键快捷按钮
+                GUILayout.BeginHorizontal();
+                string[] commonKeys = { "R", "SPACE", "ENTER", "F2", "ESC" };
+                foreach (string key in commonKeys)
+                {
+                    if (GUILayout.Button(key, UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                    {
+                        DeathKeyInput = key;
+                    }
+                }
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(2);
+
+                // 提示信息
+                GUIStyle tipStyle = new(UIUtils.LabelStyle);
+                tipStyle.normal.textColor = new Color(0.7f, 0.7f, 0.7f, 0.7f);
+                tipStyle.fontSize = 10;
+                tipStyle.wordWrap = true;
+
+                string tipText = UseChinese
+                    ? "提示：可直接输入字母、数字、F1-F12或特殊键名（如SPACE、ENTER），也可输入十六进制代码（如0x52）"
+                    : "Tip: Enter letters, numbers, F1-F12, or special keys (like SPACE, ENTER), or hex code (e.g., 0x52)";
+                GUILayout.Label(tipText, tipStyle);
+
+                GUILayout.Space(4);
+            }
+
+            GUILayout.EndVertical();
+        }
+
         private void DrawAuthorCard()
         {
             GUILayout.BeginVertical(UIUtils.CardStyle);
