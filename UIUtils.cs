@@ -633,5 +633,38 @@ namespace BaseMacro
         {
             return GUILayout.SelectionGrid(selected, texts, xCount, _selectionGridStyle, options);
         }
+
+        public static string M3TextField(string value, ref string input, ref bool focused, GUIStyle style, params GUILayoutOption[] options)
+        {
+            if (focused)
+            {
+                string newValue = GUILayout.TextField(input, style, options);
+                if (newValue != input)
+                {
+                    input = newValue;
+                }
+
+                // 当失去焦点时更新实际值
+                if (Event.current.type == EventType.MouseDown && !GUILayoutUtility.GetLastRect().Contains(Event.current.mousePosition))
+                {
+                    focused = false;
+                    value = input;
+                }
+
+                return value;
+            }
+            else
+            {
+                string newValue = GUILayout.TextField(value, style, options);
+                if (newValue != value)
+                {
+                    // 开始编辑
+                    focused = true;
+                    input = newValue;
+                }
+                return newValue;
+            }
+        }
+
     }
 }

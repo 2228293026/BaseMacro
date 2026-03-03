@@ -247,6 +247,42 @@ namespace BaseMacro
             return null;
         }
 
+        // 在现有属性后面添加
+        private bool _enableKeyFilter = false;
+        public bool EnableKeyFilter
+        {
+            get => _enableKeyFilter;
+            set
+            {
+                if (_enableKeyFilter == value) return;
+                _enableKeyFilter = value;
+            }
+        }
+
+        private int _filterMode = 0; // 0: 黑名单模式, 1: 白名单模式
+        public int FilterMode
+        {
+            get => _filterMode;
+            set => _filterMode = value;
+        }
+
+        private string _filteredKeys = "F1,F2,F3,F4";
+        public string FilteredKeys
+        {
+            get => _filteredKeys;
+            set => _filteredKeys = value;
+        }
+
+        private string _filteredAsyncKeys = "";
+        public string FilteredAsyncKeys
+        {
+            get => _filteredAsyncKeys;
+            set => _filteredAsyncKeys = value;
+        }
+
+        private (string input, bool focused) _filteredKeysState = (string.Empty, false);
+        private (string input, bool focused) _filteredAsyncKeysState = (string.Empty, false);
+
         public void OnGUI(UnityModManager.ModEntry modEntry)
         {
             UIUtils.InitializeStyles();
@@ -263,10 +299,17 @@ namespace BaseMacro
 
             DrawMainSwitchCard();
 
-            GUILayout.Space(12);
+            if (Macro)
+            {
+                GUILayout.Space(12);
+                DrawKeySettingsCard();
+            }
 
             if (Macro)
-                DrawKeySettingsCard();
+            {
+                GUILayout.Space(12);
+                DrawKeyFilterCard();
+            }
 
             GUILayout.EndVertical();
 
@@ -514,6 +557,168 @@ namespace BaseMacro
             _ => mode.ToString()
         };
 
+        private void DrawKeyFilterCard()
+        {
+            GUILayout.BeginVertical(UIUtils.CardStyle);
+            GUILayout.Label(UseChinese ? "按键过滤" : "Key Filter", UIUtils.HeaderStyle);
+            GUILayout.Space(2);
+
+            string enableFilterText = UseChinese ? "启用按键过滤" : "Enable Key Filter";
+            bool newEnableFilter = UIUtils.M3Switch(EnableKeyFilter, enableFilterText);
+            if (newEnableFilter != EnableKeyFilter)
+                EnableKeyFilter = newEnableFilter;
+
+            if (EnableKeyFilter)
+            {
+                GUILayout.Space(6);
+
+                // 分隔线
+                Color originalColor = GUI.color;
+                GUI.color = new Color(0.5f, 0.5f, 0.5f, 0.3f);
+                GUILayout.Box("", GUILayout.Height(1), GUILayout.ExpandWidth(true));
+                GUI.color = originalColor;
+
+                GUILayout.Space(4);
+
+                // 过滤模式选择
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(UseChinese ? "过滤模式" : "Filter Mode", UIUtils.LabelStyle, GUILayout.Width(100));
+                string[] modes = UseChinese
+                    ? ["黑名单模式", "白名单模式"]
+                    : ["Blacklist Mode", "Whitelist Mode"];
+                int newMode = UIUtils.M3SelectionGrid(FilterMode, modes, 2, GUILayout.Width(200));
+                if (newMode != FilterMode)
+                    FilterMode = newMode;
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(8);
+
+                // 模式说明
+                GUIStyle descStyle = new(UIUtils.LabelStyle);
+                descStyle.normal.textColor = new Color(0.7f, 0.7f, 0.7f, 0.8f);
+                descStyle.fontSize = 11;
+                descStyle.wordWrap = true;
+                GUILayout.Label(FilterMode == 0
+                    ? (UseChinese ? "⛔ 黑名单模式：列表中的按键将被阻止" : "⛔ Blacklist: Keys in the list will be blocked")
+                    : (UseChinese ? "✅ 白名单模式：只有列表中的按键允许通过" : "✅ Whitelist: Only keys in the list are allowed"),
+                    descStyle);
+
+                GUILayout.Space(8);
+
+                // 普通按键列表
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(UseChinese ? "按键列表 (逗号分隔)" : "Keys (comma separated)", UIUtils.LabelStyle, GUILayout.Width(160));
+                string newFilteredKeys = UIUtils.M3TextField(FilteredKeys,
+                    ref _filteredKeysState.input,
+                    ref _filteredKeysState.focused,
+                    UIUtils.TextFieldStyle,
+                    GUILayout.ExpandWidth(true));
+                if (newFilteredKeys != FilteredKeys)
+                    FilteredKeys = newFilteredKeys;
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(4);
+
+                // 异步按键列表
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(UseChinese ? "异步按键列表 (逗号分隔)" : "Async Keys (comma separated)", UIUtils.LabelStyle, GUILayout.Width(160));
+                if (SkyHookMode)
+                {
+                    string newFilteredAsyncKeys = UIUtils.M3TextField(FilteredAsyncKeys,
+                        ref _filteredAsyncKeysState.input,
+                        ref _filteredAsyncKeysState.focused,
+                        UIUtils.TextFieldStyle,
+                        GUILayout.ExpandWidth(true));
+                    if (newFilteredAsyncKeys != FilteredAsyncKeys)
+                        FilteredAsyncKeys = newFilteredAsyncKeys;
+                }
+                else
+                {
+                    GUIStyle disabledStyle = new(UIUtils.LabelStyle);
+                    disabledStyle.normal.textColor = new Color(0.5f, 0.5f, 0.5f, 0.5f);
+                    GUILayout.Label(UseChinese ? "（需开启 SkyHook 模式）" : "(Requires SkyHook Mode)", disabledStyle);
+                }
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(8);
+
+                // 常用按键标签
+                GUILayout.Label(UseChinese ? "常用按键:" : "Common Keys:", UIUtils.LabelStyle);
+                GUILayout.Space(2);
+
+                // 第一行
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("F1,F2,F3,F4", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "F1,F2,F3,F4";
+                    if (SkyHookMode) FilteredAsyncKeys = "F1,F2,F3,F4";
+                }
+                if (GUILayout.Button("F5,F6,F7,F8", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "F5,F6,F7,F8";
+                    if (SkyHookMode) FilteredAsyncKeys = "F5,F6,F7,F8";
+                }
+                if (GUILayout.Button("F9,F10,F11,F12", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "F9,F10,F11,F12";
+                    if (SkyHookMode) FilteredAsyncKeys = "F9,F10,F11,F12";
+                }
+                GUILayout.EndHorizontal();
+
+                // 第二行
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("A,S,D,F", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "A,S,D,F";
+                    if (SkyHookMode) FilteredAsyncKeys = "A,S,D,F";
+                }
+                if (GUILayout.Button("J,K,L", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "J,K,L";
+                    if (SkyHookMode) FilteredAsyncKeys = "J,K,L";
+                }
+                if (GUILayout.Button("1,2,3,4", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "1,2,3,4";
+                    if (SkyHookMode) FilteredAsyncKeys = "1,2,3,4";
+                }
+                GUILayout.EndHorizontal();
+
+                // 第三行
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("SPACE,ENTER,ESC", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "SPACE,ENTER,ESC";
+                    if (SkyHookMode) FilteredAsyncKeys = "SPACE,ENTER,ESC";
+                }
+                if (GUILayout.Button("UP,DOWN,LEFT,RIGHT", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "UP,DOWN,LEFT,RIGHT";
+                    if (SkyHookMode) FilteredAsyncKeys = "UP,DOWN,LEFT,RIGHT";
+                }
+                if (GUILayout.Button("CTRL,ALT,SHIFT", UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
+                {
+                    FilteredKeys = "CTRL,ALT,SHIFT";
+                    if (SkyHookMode) FilteredAsyncKeys = "CTRL,ALT,SHIFT";
+                }
+                GUILayout.EndHorizontal();
+
+                GUILayout.Space(8);
+
+                // 提示信息
+                GUIStyle tipStyle = new(UIUtils.LabelStyle);
+                tipStyle.normal.textColor = new Color(0.7f, 0.7f, 0.7f, 0.7f);
+                tipStyle.fontSize = 10;
+                tipStyle.wordWrap = true;
+                GUILayout.Label(UseChinese
+                    ? "提示：支持按键名称（A、B、SPACE、ENTER等）和虚拟键码（0x41格式）。多个按键用逗号分隔。"
+                    : "Tip: Supports key names (A, B, SPACE, ENTER, etc.) and virtual key codes (0x41 format). Separate multiple keys with commas.",
+                    tipStyle);
+            }
+
+            GUILayout.EndVertical();
+        }
+
         // 在 DrawOtherSettingsCard 方法中修改
         private void DrawOtherSettingsCard()
         {
@@ -652,7 +857,7 @@ namespace BaseMacro
             GUILayout.Label(versionText, authorStyle);
 
             GUILayout.FlexibleSpace();
-            GUILayout.Label($"📧 {(UseChinese ? "hitmargin@qq.com" : "hitmargin@Outlock.com")}", authorStyle);
+            GUILayout.Label($"📧 {(UseChinese ? "hitmargin@qq.com" : "hitmargin@Outlook.com")}", authorStyle);
             GUILayout.EndHorizontal();
 
             GUILayout.Space(4);
