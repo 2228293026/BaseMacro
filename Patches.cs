@@ -71,7 +71,6 @@ namespace BaseMacro
                 if (Main.Settings.SimulateKeyPress && Main.Settings.SkyHookMode && InputSystem.IsInitialized)
                 {
                     InputSystem.SendKeyDirect((byte)Main.Settings.DeathKeyCode, true);
-                    InputSystem.SendKeyDirect((byte)Main.Settings.DeathKeyCode, false);
                 }
             }
         }
