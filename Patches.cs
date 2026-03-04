@@ -56,7 +56,7 @@ namespace BaseMacro
             [HarmonyPostfix]
             public static void Postfix()
             {
-                if (Main.Settings.EnableDeathKey)
+                if (Main.Settings.EnableDeathKey && Main.IsEnabled && Main.Settings.Macro)
                 {
                     ADOBase.controller?.StartCoroutine(DelayedSendDeathKey());
                     ADOBase.editor?.StartCoroutine(DelayedSendDeathKey());
