@@ -248,6 +248,8 @@ namespace BaseMacro
         // 检查普通按键是否允许通过
         private static bool IsKeyAllowed(KeyCode keyCode)
         {
+            if (!Main.IsEnabled || !Main.Settings.Macro)
+                return true; // 如果宏未启用，不过滤任何按键
             if (!Main.Settings.EnableKeyFilter) return true;
 
             // 缓存解析结果
@@ -450,6 +452,8 @@ namespace BaseMacro
         // 检查异步按键是否允许通过
         private static bool IsAsyncKeyAllowed(ushort keyCode)
         {
+            if (!Main.IsEnabled || !Main.Settings.Macro)
+                return true; // 如果宏未启用，不过滤任何按键
             if (!Main.Settings.EnableKeyFilter)
             {
                 // Main.Logger.Log($"Key filter disabled, allowing async key: {keyCode}");
