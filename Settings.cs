@@ -85,16 +85,6 @@ namespace BaseMacro
             }
         }
 
-        private bool _highPrecisionTime = false;
-        public bool HighPrecisionTime
-        {
-            get => _highPrecisionTime;
-            set
-            {
-                if (_highPrecisionTime == value) return;
-                _highPrecisionTime = value;
-            }
-        }
         // 使用ValueTuple减少GC
         private (string input, bool focused) _adjustStepState = (string.Empty, false);
         private (string input, bool focused) _timeOffsetState = (string.Empty, false);
@@ -417,9 +407,6 @@ namespace BaseMacro
             GUILayout.Space(2);
             string arrowText = UseChinese ? "允许左右键调整延迟(游戏中)" : "Allow adjustment of delay using left and right keys (in-game)";
             EnableArrowTimeAdjust = UIUtils.M3Switch(EnableArrowTimeAdjust, arrowText);
-            GUILayout.Space(2);
-            string highPrecisionText = UseChinese ? "启用高精度时间（提高同步精度）" : "Enable High Precision Time (improves sync accuracy)";
-            HighPrecisionTime = UIUtils.M3Switch(HighPrecisionTime, highPrecisionText);
             GUILayout.Space(2);
             string highPrecisionAsyncText = UseChinese ? "[实验性]启用高精度异步" : "[Experimental]Enable High Precision Async";
             HighPrecisionAsync = UIUtils.M3Switch(HighPrecisionAsync, highPrecisionAsyncText);

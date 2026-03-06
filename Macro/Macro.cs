@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using UnityEngine;
+using static BaseMacro.Macro.SkyHookSystem;
 
 #nullable enable
 
@@ -34,33 +35,45 @@ namespace BaseMacro.Macro
         // ─────────────────────────────────────────────
         //  时间锚点
         //
-        //  旧架构：主线程发布"触发窗口 [now, now+frameDelta]"
-        //           工作线程在帧开始时把所有在窗口内的按键一次性全发出去
-        //           → 本该均匀分布的按键全部堆在帧开始，时序错误
+        //  旧方案：主线程每帧写 (audioTime=songposition_minusi, systemTicks=QPC原始值)
+        //           工作线程用 QPC 差插值推算 audioNow
+        //           问题1：songposition_minusi 每 DSP 缓冲区(~11ms)才跳变一次，量化误差叠加
+        //           问题2：QPC 时钟与音频 DSP 时钟是两块独立晶振，5分钟可漂移数毫秒
         //
-        //  新架构：主线程发布"此刻音频时间 + 此刻系统时间 + 播放速率"
-        //           工作线程用锚点推算任意时刻的精确音频时间
-        //           → 工作线程自己掐表，在每个按键该触发的精确时刻发出
-        //           → 触发精度从"帧级（16ms）"提升到"QPC级（~100ns）"
+        //  新方案：只在初始化时记录一次参考点 (songPosRef, dspTimeRef)
+        //           工作线程每次循环直接调用 DSPTimeSimulater.GetDSPTime()，得到
+        //           经过漂移校准的实时 DSP 时间，再换算为歌曲位置
+        //
+        //  audioNow = songPosRef + (DSPTimeSimulater.GetDSPTime() - dspTimeRef) * pitch
+        //
+        //  优势：
+        //    · DSPTimeSimulater 内部用 FileTime(~100ns) 帧内插值，无 DSP 量化
+        //    · 每 120 帧做一次 DSP 漂移修正（SINGLE_ROUND），长曲不漂移
+        //    · 彻底移除 QPC DllImport、perfFrequency 等代码
         // ─────────────────────────────────────────────
         private sealed class TimeAnchor
         {
-            public double audioTime;       // 锚点时刻的音频时间（秒）
-            public long systemTicks;     // 锚点时刻的 QPC 原始值
-            public double pitch;           // 播放速率
+            public double songPosRef;      // 参考点的歌曲位置（秒），初始化时确定
+            public double dspTimeRef;      // 参考点的 DSP 时间（秒），初始化时确定
+            public double pitch;           // 播放速率（每帧刷新，检测到变化时同步更新参考点）
             public double timeOffset;      // 用户偏移（秒）
             public bool simulateKeyPress;
             public double[]? triggerTimes;
             public List<scrFloor>? floors;
             public byte[] keyCodesSnapshot;
-            // keyIndexSnapshot 已移除：工作线程用本地 localKeyIndex 维护，此字段从未被读取
             public bool valid;
             public TimeAnchor() { keyCodesSnapshot = []; }
         }
 
-        private static TimeAnchor _anchorA = new();
-        private static TimeAnchor _anchorB = new();
+        private static readonly TimeAnchor _anchorA = new();
+        private static readonly TimeAnchor _anchorB = new();
         private static volatile TimeAnchor _currentAnchor = new();
+
+        // 参考点（主线程独占写，仅在 Initialize 和 pitch 变化时更新）
+        // 复制到每帧的 anchor 中，保证工作线程读到 (songPosRef, dspTimeRef, pitch) 一致快照
+        private static double _songPosRef;
+        private static double _dspTimeRef;
+        private static float _lastPitch;
 
         // ─────────────────────────────────────────────
         //  工作线程 → 主线程反馈
@@ -103,20 +116,12 @@ namespace BaseMacro.Macro
         private const uint KEYEVENTF_KEYDOWN = 0;
         private const uint KEYEVENTF_KEYUP = 2;
 
-        [ThreadStatic]
-        private static SkyHookSystem.INPUT _cachedInput;
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint SendInput(uint nInputs, IntPtr pInputs, int cbSize);
         [DllImport("user32.dll")]
         private static extern uint MapVirtualKey(uint uCode, uint uMapType);
-        [DllImport("Kernel32.dll")]
-        private static extern bool QueryPerformanceCounter(out long lpPerformanceCount);
-        [DllImport("Kernel32.dll")]
-        private static extern bool QueryPerformanceFrequency(out long lpFrequency);
 
-        private static readonly long perfFrequency;
-        private static readonly bool usePerfCounter;
         private static readonly byte[] scanCodeCache = new byte[256];
 
         private static readonly Dictionary<string, byte> KeyNameToCode = new()
@@ -200,7 +205,6 @@ namespace BaseMacro.Macro
 
         static Macro()
         {
-            usePerfCounter = QueryPerformanceFrequency(out perfFrequency);
             for (int i = 0; i < 256; i++)
                 scanCodeCache[i] = (byte)MapVirtualKey((uint)i, 0);
         }
@@ -243,21 +247,24 @@ namespace BaseMacro.Macro
                 Log("[Macro-Main] controller.Hit() 已调用");
             }
 
-            // audioTime 先读，nowTicks 紧跟其后
-            // 锚点含义：「在 systemTicks 时刻，音频位置是 audioTime」
-            // 先读 audioTime 再立即采样 ticks，使 systemTicks 尽量贴近 audioTime 的读取时刻
-            double audioTime = conductor!.songposition_minusi;
-            long nowTicks = GetRawTicks();
-            float pitch = conductor.song.pitch;
-
             // 仅 DEBUG 构建用于日志；Release 下 Log 被 [Conditional] 裁剪，volatile read 也随之省去
 #if DEBUG
             int lastFloor = Volatile.Read(ref _workerLastTriggeredFloor);
 #endif
+            float pitch = conductor!.song.pitch;
+
+            // 检测 pitch 变化（速率变化时重置参考点，防止歌曲位置公式漂移）
+            if (pitch != _lastPitch)
+            {
+                _dspTimeRef = DSPTimeSimulater.GetDSPTime();
+                _songPosRef = conductor!.songposition_minusi;
+                _lastPitch = pitch;
+            }
 
             var anchor = ReferenceEquals(_currentAnchor, _anchorA) ? _anchorB : _anchorA;
-            anchor.audioTime = audioTime;
-            anchor.systemTicks = nowTicks;
+            // 参考点写入 inactive anchor，保证工作线程读到 (songPosRef, dspTimeRef, pitch) 一致快照
+            anchor.songPosRef = _songPosRef;
+            anchor.dspTimeRef = _dspTimeRef;
             anchor.pitch = pitch;
             anchor.timeOffset = settings.TimeOffset * 0.001;
             anchor.simulateKeyPress = settings.SimulateKeyPress;
@@ -275,7 +282,7 @@ namespace BaseMacro.Macro
                 _startSignal.Release();
 
 #if DEBUG
-            Log($"[Macro-Main] 锚点已发布 audioTime={audioTime:F6}s lastFloor={lastFloor}");
+            Log($"[Macro-Main] 锚点已发布 pitch={pitch} lastFloor={lastFloor}");
 #endif
         }
 
@@ -319,20 +326,16 @@ namespace BaseMacro.Macro
                 bool simulateKey = anchor.simulateKeyPress;
                 double timeOffset = anchor.timeOffset;
                 double pitch = anchor.pitch;
-                // Bug修复：将 audioTime 和 systemTicks 复制到局部变量
-                // 双缓冲只保证"切换时不写当前缓冲"，但工作线程持有 anchor 引用跨越 Sleep(1) 时，
-                // 主线程可能在 2 帧后轮转回来覆写同一个对象的这两个字段（每帧都变化）。
-                // 其余字段（triggerTimes/floors/keys）帧间不变或已为独立引用，无此问题。
-                double localAudioTime = anchor.audioTime;
-                long localSystemTicks = anchor.systemTicks;
+                // 复制到局部变量：anchor 对象可能在工作线程持有引用期间被主线程复写
+                double localSongPosRef = anchor.songPosRef;
+                double localDspTimeRef = anchor.dspTimeRef;
                 bool hitNeeded = false;
                 bool triggered = false;
 
-                long nowTicks = GetRawTicks();
-                double elapsed = usePerfCounter
-                    ? (double)(nowTicks - localSystemTicks) / perfFrequency
-                    : (double)(nowTicks - localSystemTicks) * 1e-7;
-                double audioNow = localAudioTime + elapsed * pitch;
+                // 新时间公式：直接使用 DSPTimeSimulater（无 QPC 漂移，帧内已插值）
+                // audioNow = songPosRef + (dspNow - dspTimeRef) * pitch
+                double dspNow = DSPTimeSimulater.GetDSPTime();
+                double audioNow = localSongPosRef + (dspNow - localDspTimeRef) * pitch;
 
                 for (int i = localLastFloor + 1; i < triggerCount; i++)
                 {
@@ -450,22 +453,22 @@ namespace BaseMacro.Macro
         {
             if (_cachedSkyHookMode)
             {
-                // Bug2 修复：SkyHookEvent.Create 期望 100ns 单位（FileTime格式）
-                // 使用 GetAs100Ns() 保证单位正确
-                long elapsed = GetAs100Ns() - Interlocked.Read(ref startTimeTicks);
+                // DSPTimeSimulater.GetDSPTimeAsFileTime() 已经是经过漂移校正的 FileTime 格式
+                // 比 GetAs100Ns()(QPC转换) 更精确，且与 startTimeTicks 使用同一时钟源
+                long elapsed = DSPTimeSimulater.GetDSPTimeAsFileTime() - Interlocked.Read(ref startTimeTicks);
                 AsyncInputManager.EnqueueEvent(
                     SkyHookSystem.SkyHookEvent.Create(keyCode, isDown, elapsed));
                 Log($"[Macro-Worker] SkyHook key=0x{keyCode:X2} down={isDown}");
             }
             else
             {
-                _cachedInput.type = INPUT_KEYBOARD;
-                _cachedInput.u.ki.wVk = keyCode;
-                _cachedInput.u.ki.wScan = scanCodeCache[keyCode];
-                _cachedInput.u.ki.dwFlags = isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
-                fixed (SkyHookSystem.INPUT* ptr = &_cachedInput)
-                    SendInput(1, (IntPtr)ptr, sizeof(SkyHookSystem.INPUT));
-                Log($"[Macro-Worker] SendInput key=0x{keyCode:X2} down={isDown}");
+                INPUT* pInput = stackalloc INPUT[1]; // stackalloc 更快
+                pInput->type = INPUT_KEYBOARD;
+                pInput->u.ki.wVk = keyCode;
+                pInput->u.ki.wScan = scanCodeCache[keyCode];
+                pInput->u.ki.dwFlags = isDown ? KEYEVENTF_KEYDOWN : KEYEVENTF_KEYUP;
+
+                SendInput(1, (IntPtr)pInput, sizeof(INPUT));
             }
         }
 
@@ -490,7 +493,15 @@ namespace BaseMacro.Macro
             ParseKeyCodes();
             initialized = true;
 
-            int syncFloor = SyncFloor(conductor!.songposition_minusi);
+            // 初始化参考点：此后工作线程用 DSPTimeSimulater.GetDSPTime() 插值
+            // 同时写入 _anchorA/_anchorB，避免某一个 anchor 持有初始零值
+            _dspTimeRef = DSPTimeSimulater.GetDSPTime();
+            _songPosRef = conductor!.songposition_minusi;
+            _lastPitch = conductor.song.pitch;
+            _anchorA.dspTimeRef = _anchorB.dspTimeRef = _dspTimeRef;
+            _anchorA.songPosRef = _anchorB.songPosRef = _songPosRef;
+
+            int syncFloor = SyncFloor(_songPosRef);
             Volatile.Write(ref _workerLastTriggeredFloor, syncFloor);
             Volatile.Write(ref _workerKeyIndex, 0);
 
@@ -571,7 +582,7 @@ namespace BaseMacro.Macro
             levelMaker = null;
             conductor = null;
 
-            Volatile.Write(ref _workerLastTriggeredFloor, -1);
+            // Volatile.Write(ref _workerLastTriggeredFloor, -1);
             Volatile.Write(ref _workerKeyIndex, 0);
             Interlocked.Exchange(ref _workerNeedsHit, 0);
 
@@ -664,32 +675,11 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  计时器
         // ═══════════════════════════════════════════════════════════════
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static long GetAudioSyncTicks() =>
-            Main.Settings.HighPrecisionTime
-                ? DSPTimeSimulater.GetDSPTimeAsFileTime()
-                : GetAs100Ns(); // 返回 100ns 单位，与 FileTime 格式一致
 
-        // 返回 100ns 单位（FileTime 格式），用于 SkyHook elapsed 计算
-        // Fix: 先除再乘，避免 counter * 10_000_000L 在 TSC-based QPC（~3GHz）下
-        //      约 30 分钟后 long 溢出（3e9 * 10_000_000 * 1800 ≈ 5.4e19 > long.MaxValue）
+        // SkyHook startTimeTicks 基准：统一使用 DSPTimeSimulater（已校准，与工作线程时钟源一致）
+        // HighPrecisionTime=true 时 GetDSPTimeAsFileTime() 已包含 FileTime 插值，故两种情况相同
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static long GetAs100Ns()
-        {
-            if (usePerfCounter && QueryPerformanceCounter(out long counter))
-                return (counter / perfFrequency) * 10_000_000L
-                     + (counter % perfFrequency) * 10_000_000L / perfFrequency;
-            return DateTime.UtcNow.Ticks;
-        }
-
-        // 返回 QPC 原始值（不做单位转换），用于锚点时间推算（精度最高）
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static long GetRawTicks()
-        {
-            if (usePerfCounter && QueryPerformanceCounter(out long counter))
-                return counter;
-            return DateTime.UtcNow.Ticks;
-        }
+        private static long GetAudioSyncTicks() => DSPTimeSimulater.GetDSPTimeAsFileTime();
 
         // ═══════════════════════════════════════════════════════════════
         //  输入调整
