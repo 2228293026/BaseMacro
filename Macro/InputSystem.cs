@@ -4,20 +4,14 @@ using System.Runtime.InteropServices;
 
 namespace BaseMacro.Macro
 {
-    /// <summary>
-    /// 与 C++ DLL 对应的输入模式枚举
-    /// </summary>
     public enum InputMode : int
     {
-        Auto = 0,  // 自动选择最底层可用方式
-        NtUserInjectKeyboard = 1,  // NtUserInjectKeyboardInput（最底层）
-        NtUserSendInput = 2,  // NtUserSendInput
-        SendInput = 3,  // 标准 SendInput（兜底）
+        Auto = 0,
+        NtUserInjectKeyboard = 1,
+        NtUserSendInput = 2,
+        SendInput = 3,
     }
 
-    /// <summary>
-    /// GetAvailableModes() 返回值的位掩码解析辅助
-    /// </summary>
     [Flags]
     public enum AvailableModeMask : int
     {
@@ -32,7 +26,9 @@ namespace BaseMacro.Macro
         private static IntPtr _hModule = IntPtr.Zero;
         private static bool _isInitialized = false;
 
-        // ── Win32 ──────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  Win32
+        // ══════════════════════════════════════════════════════
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
         private static extern IntPtr LoadLibrary(string lpFileName);
 
@@ -42,21 +38,30 @@ namespace BaseMacro.Macro
         [DllImport("kernel32.dll")]
         private static extern bool FreeLibrary(IntPtr hModule);
 
-        // ── 委托 ───────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  委托定义
+        // ══════════════════════════════════════════════════════
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int InitializeDelegate(int maxQueueSize);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate int PushKeyEventDelegate(byte keyCode, [MarshalAs(UnmanagedType.Bool)] bool isDown, uint delayMs);
+        private delegate int PushKeyEventDelegate(
+            byte keyCode,
+            [MarshalAs(UnmanagedType.Bool)] bool isDown,
+            uint delayMs);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate int SendKeyDirectDelegate(byte keyCode, [MarshalAs(UnmanagedType.Bool)] bool isDown);
+        private delegate int SendKeyDirectDelegate(
+            byte keyCode,
+            [MarshalAs(UnmanagedType.Bool)] bool isDown);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private unsafe delegate int SendKeyCombinationDelegate(byte* keys, int keyCount, uint delayMs);
+        private unsafe delegate int SendKeyCombinationDelegate(
+            byte* keys, int keyCount, uint delayMs);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate int SendTextDelegate([MarshalAs(UnmanagedType.LPStr)] string text);
+        private delegate int SendTextDelegate(
+            [MarshalAs(UnmanagedType.LPStr)] string text);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int StartProcessingDelegate();
@@ -68,7 +73,8 @@ namespace BaseMacro.Macro
         private delegate void ClearQueueDelegate();
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-        private delegate int GetInputQueueStatusDelegate(out int queueSize, out int processedCount);
+        private delegate int GetInputQueueStatusDelegate(
+            out int queueSize, out int processedCount);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void ShutdownDelegate();
@@ -79,7 +85,11 @@ namespace BaseMacro.Macro
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate bool IsUsingNtFunctionsDelegate();
 
-        // ── 模式控制委托 ───────────────────────────────────────────
+        // ── 新增：已缺失的委托 ─────────────────────────────────
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetPressedKeysCountDelegate();
+
+        // ── 模式控制 ───────────────────────────────────────────
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int SetInputModeDelegate(int mode);
 
@@ -89,7 +99,9 @@ namespace BaseMacro.Macro
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int GetAvailableModesDelegate();
 
-        // ── 函数指针 ───────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  函数指针
+        // ══════════════════════════════════════════════════════
         private static InitializeDelegate InitializeFunc;
         private static PushKeyEventDelegate PushKeyEventFunc;
         private static SendKeyDirectDelegate SendKeyDirectFunc;
@@ -102,18 +114,22 @@ namespace BaseMacro.Macro
         private static ShutdownDelegate ShutdownFunc;
         private static EmergencyStopDelegate EmergencyStopFunc;
         private static IsUsingNtFunctionsDelegate IsUsingNtFunctionsFunc;
+        private static GetPressedKeysCountDelegate GetPressedKeysCountFunc; // ← 新增
         private static SetInputModeDelegate SetInputModeFunc;
         private static GetInputModeDelegate GetInputModeFunc;
         private static GetAvailableModesDelegate GetAvailableModesFunc;
 
-        // ── 初始化 ─────────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  初始化
+        // ══════════════════════════════════════════════════════
         public static bool Initialize()
         {
             if (_isInitialized) return true;
 
             try
             {
-                string modPath = Main.Mod?.Path ?? Path.GetDirectoryName(typeof(InputSystem).Assembly.Location);
+                string modPath = Main.Mod?.Path
+                    ?? Path.GetDirectoryName(typeof(InputSystem).Assembly.Location);
                 string dllPath = Path.Combine(modPath, "InputSystem.dll");
 
                 if (!File.Exists(dllPath))
@@ -129,8 +145,19 @@ namespace BaseMacro.Macro
                     return false;
                 }
 
+                // 必须项
                 InitializeFunc = GetDelegate<InitializeDelegate>("Initialize");
                 PushKeyEventFunc = GetDelegate<PushKeyEventDelegate>("PushKeyEvent");
+
+                if (InitializeFunc == null || PushKeyEventFunc == null)
+                {
+                    Console.WriteLine("[InputSystem] 缺少必要的导出函数");
+                    FreeLibrary(_hModule);
+                    _hModule = IntPtr.Zero;
+                    return false;
+                }
+
+                // 可选项（GetDelegate 内部已做 null 保护）
                 SendKeyDirectFunc = GetDelegate<SendKeyDirectDelegate>("SendKeyDirect");
                 SendKeyCombinationFunc = GetDelegate<SendKeyCombinationDelegate>("SendKeyCombination");
                 SendTextFunc = GetDelegate<SendTextDelegate>("SendText");
@@ -141,26 +168,20 @@ namespace BaseMacro.Macro
                 ShutdownFunc = GetDelegate<ShutdownDelegate>("Shutdown");
                 EmergencyStopFunc = GetDelegate<EmergencyStopDelegate>("EmergencyStop");
                 IsUsingNtFunctionsFunc = GetDelegate<IsUsingNtFunctionsDelegate>("IsUsingNtFunctions");
+                GetPressedKeysCountFunc = GetDelegate<GetPressedKeysCountDelegate>("GetPressedKeysCount"); // ← 新增
                 SetInputModeFunc = GetDelegate<SetInputModeDelegate>("SetInputMode");
                 GetInputModeFunc = GetDelegate<GetInputModeDelegate>("GetInputMode");
                 GetAvailableModesFunc = GetDelegate<GetAvailableModesDelegate>("GetAvailableModes");
 
-                if (InitializeFunc == null || PushKeyEventFunc == null)
-                {
-                    Console.WriteLine("[InputSystem] 缺少必要的导出函数");
-                    FreeLibrary(_hModule);
-                    _hModule = IntPtr.Zero;
-                    return false;
-                }
-
-                int result = InitializeFunc(2048);
+                // 新版 C++ 的环形缓冲区固定 8192，maxQueueSize 参数已忽略
+                // 传 0 即可，保持向后兼容
+                int result = InitializeFunc(0);
                 Console.WriteLine($"[InputSystem] 初始化结果: {result}");
 
                 _isInitialized = (result == 0);
                 if (_isInitialized)
                 {
-                    AppDomain.CurrentDomain.ProcessExit += (s, e) => Shutdown();
-
+                    AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown();
                     SyncModeFromSettings();
                 }
 
@@ -176,7 +197,11 @@ namespace BaseMacro.Macro
         private static T GetDelegate<T>(string name) where T : Delegate
         {
             IntPtr ptr = GetProcAddress(_hModule, name);
-            if (ptr == IntPtr.Zero) { Console.WriteLine($"[InputSystem] 找不到函数: {name}"); return null; }
+            if (ptr == IntPtr.Zero)
+            {
+                Console.WriteLine($"[InputSystem] 找不到函数: {name}");
+                return null;
+            }
             return Marshal.GetDelegateForFunctionPointer<T>(ptr);
         }
 
@@ -184,7 +209,6 @@ namespace BaseMacro.Macro
         {
             try
             {
-                // 获取当前 Mod 的 Settings 实例
                 if (Main.Mod != null && Main.Settings is Settings settings)
                 {
                     Main.Mod.Logger.Log($"[InputSystem] 从设置同步模式: {settings.InputMode}");
@@ -193,16 +217,13 @@ namespace BaseMacro.Macro
             }
             catch (Exception ex)
             {
-                Main.Mod.Logger.Log($"[InputSystem] 同步模式失败: {ex.Message}");
+                Main.Mod?.Logger.Log($"[InputSystem] 同步模式失败: {ex.Message}");
             }
         }
 
-        // ── 模式控制 API ───────────────────────────────────────────
-
-        /// <summary>
-        /// 设置输入模式。返回实际生效的模式（Auto 时返回解析后的真实模式）。
-        /// 返回 -1 表示参数无效。
-        /// </summary>
+        // ══════════════════════════════════════════════════════
+        //  模式控制
+        // ══════════════════════════════════════════════════════
         public static InputMode SetInputMode(InputMode mode)
         {
             if (!_isInitialized || SetInputModeFunc == null) return InputMode.SendInput;
@@ -212,31 +233,22 @@ namespace BaseMacro.Macro
                 Console.WriteLine($"[InputSystem] SetInputMode 失败: {result}");
                 return GetInputMode();
             }
-            Console.WriteLine($"[InputSystem] 模式已切换 -> 请求={mode}, 实际生效={((InputMode)result)}");
+            Console.WriteLine($"[InputSystem] 模式切换 → 请求={mode}, 实际={((InputMode)result)}");
             return (InputMode)result;
         }
 
-        /// <summary>
-        /// 获取当前实际生效的输入模式（Auto 时返回解析后的模式）
-        /// </summary>
         public static InputMode GetInputMode()
         {
             if (!_isInitialized || GetInputModeFunc == null) return InputMode.SendInput;
             return (InputMode)GetInputModeFunc();
         }
 
-        /// <summary>
-        /// 获取当前系统支持的输入模式（位掩码）
-        /// </summary>
         public static AvailableModeMask GetAvailableModes()
         {
             if (!_isInitialized || GetAvailableModesFunc == null) return AvailableModeMask.SendInput;
             return (AvailableModeMask)GetAvailableModesFunc();
         }
 
-        /// <summary>
-        /// 检查某个模式在当前系统上是否可用
-        /// </summary>
         public static bool IsModeAvailable(InputMode mode)
         {
             var mask = GetAvailableModes();
@@ -250,8 +262,9 @@ namespace BaseMacro.Macro
             };
         }
 
-        // ── 输入 API ───────────────────────────────────────────────
-
+        // ══════════════════════════════════════════════════════
+        //  输入 API
+        // ══════════════════════════════════════════════════════
         public static int PushKeyEvent(byte keyCode, bool isDown, uint delayMs = 0)
         {
             if (!_isInitialized || PushKeyEventFunc == null) return -1;
@@ -266,7 +279,8 @@ namespace BaseMacro.Macro
 
         public static unsafe int SendKeyCombination(byte[] keys, uint delayMs = 50)
         {
-            if (!_isInitialized || SendKeyCombinationFunc == null || keys == null || keys.Length == 0) return -1;
+            if (!_isInitialized || SendKeyCombinationFunc == null
+                || keys == null || keys.Length == 0) return -1;
             fixed (byte* pKeys = keys)
                 return SendKeyCombinationFunc(pKeys, keys.Length, delayMs);
         }
@@ -288,6 +302,13 @@ namespace BaseMacro.Macro
             return GetInputQueueStatusFunc(out queueSize, out processedCount);
         }
 
+        /// <summary>新增：获取当前仍处于按下状态的按键数量</summary>
+        public static int GetPressedKeysCount()
+        {
+            if (!_isInitialized || GetPressedKeysCountFunc == null) return 0;
+            return GetPressedKeysCountFunc();
+        }
+
         public static void Shutdown()
         {
             try { ShutdownFunc?.Invoke(); } catch { }
@@ -295,7 +316,10 @@ namespace BaseMacro.Macro
             _isInitialized = false;
         }
 
-        public static void EmergencyStop() { if (_isInitialized && EmergencyStopFunc != null) EmergencyStopFunc(); }
+        public static void EmergencyStop()
+        {
+            if (_isInitialized && EmergencyStopFunc != null) EmergencyStopFunc();
+        }
 
         public static bool IsUsingNtFunctions()
         {
@@ -303,14 +327,16 @@ namespace BaseMacro.Macro
             try { return IsUsingNtFunctionsFunc(); } catch { return false; }
         }
 
-        // ── 便捷方法 ───────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  便捷方法
+        // ══════════════════════════════════════════════════════
         public static void KeyDown(byte keyCode) => PushKeyEvent(keyCode, true);
         public static void KeyUp(byte keyCode) => PushKeyEvent(keyCode, false);
 
         public static void KeyPress(byte keyCode, uint durationMs = 50)
         {
             PushKeyEvent(keyCode, true, durationMs);
-            PushKeyEvent(keyCode, false);
+            PushKeyEvent(keyCode, false, 0);
         }
 
         public static void KeyDownDirect(byte keyCode) => SendKeyDirect(keyCode, true);
