@@ -1,8 +1,11 @@
 # BaseMacro
 
-![C#](https://img.shields.io/badge/Lang-C%23-c9c8e4.svg?logo=csharp)
-![Visual Studio](https://img.shields.io/badge/IDE-Visual%20Studio-c9c8e4.svg?logo=visualstudio)
-![Downloads](https://img.shields.io/github/downloads/2228293026/BaseMacro/total)
+[![C# 10.0](https://img.shields.io/badge/C%23-10.0-239120?logo=csharp&logoColor=white)](https://dotnet.microsoft.com/zh-cn/languages/csharp)
+[![.NET Framework 4.8.1](https://img.shields.io/badge/.NET%20Framework-4.8.1-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net481)
+[![Visual Studio 2026](https://img.shields.io/badge/Visual%20Studio-2026-5C2D91?logo=visualstudio&logoColor=white)](https://visualstudio.microsoft.com/zh-hans/)
+[![License](https://img.shields.io/github/license/2228293026/BaseMacro?color=blue)](https://github.com/2228293026/BaseMacro/blob/master/LICENSE.txt)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://github.com/2228293026/BaseMacro/blob/master/AsyncInputOptimize-LICENSE.txt)
+[![Downloads](https://img.shields.io/github/downloads/2228293026/BaseMacro/total)](https://github.com/2228293026/BaseMacro/releases)
 
 [English README](README.en.md)
 
