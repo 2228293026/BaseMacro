@@ -603,9 +603,11 @@ namespace BaseMacro.Macro
         private static void ApplyHoldBehavior(scrController controller)
         {
             if (controller == null || !Main.Settings.Macro) return;
-            // SimulateKeyPress=false 时，表达式短路已令结果为 false，第二个 if 是死代码
+            // SimulateKeyPress=false 时，表达式短路已令结果为 false，第二个 if 是死代码, 保险操作
             controller.requireHolding = Main.Settings.SimulateKeyPress &&
                                         Persistence.holdBehavior < HoldBehavior.NoHoldNeeded;
+            if (!Main.Settings.SimulateKeyPress)
+                controller.requireHolding = false;
         }
 
         // ═══════════════════════════════════════════════════════════════
