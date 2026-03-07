@@ -1,62 +1,251 @@
 # BaseMacro
 
-`BaseMacro` is a UnityModManager mod for **A Dance of Fire and Ice (ADOFAI)**, focused on macro triggering, input simulation, asynchronous input handling, and key filtering.
+[中文说明](README.md)
 
-## Overview
+`BaseMacro` is a UnityModManager (UMM) mod for **A Dance of Fire and Ice (ADOFAI)**. It is designed to provide stable, tunable, and filterable automated input workflows, from direct in-game hit triggering to system-level key simulation.
 
-- **Automatic macro trigger** based on floor timing.
-- **Two trigger paths**:
-  - Direct `controller.Hit(false)` calls.
-  - Keyboard simulation (SendInput / SkyHook).
-- **SkyHook asynchronous mode** for high-frequency input scenarios.
-- **Timing offset and hotkey adjustments** during gameplay.
-- **Death key** support with configurable delay.
-- **Input filtering** for sync/async key sources.
-- **Chinese/English UI toggle** in settings.
+---
 
-## Key Settings
+## Table of Contents
 
-The following options are exposed in the mod settings panel (`Settings.cs`):
+- [1. Feature Overview](#1-feature-overview)
+- [2. How Input Modes Work](#2-how-input-modes-work)
+- [3. Installation and Update](#3-installation-and-update)
+- [4. Build Guide (Developers)](#4-build-guide-developers)
+- [5. Settings Reference](#5-settings-reference)
+- [6. Runtime Tuning & Hotkeys](#6-runtime-tuning--hotkeys)
+- [7. Recommended Presets](#7-recommended-presets)
+- [8. Troubleshooting](#8-troubleshooting)
+- [9. Project Structure](#9-project-structure)
+- [10. License](#10-license)
 
-- `Macro`: Master switch for macro logic.
-- `MacroKeys`: Comma-separated macro key sequence (for example: `J,K,L`).
-- `SimulateKeyPress`: Use key simulation instead of direct hit.
-- `SkyHookMode`: Enable SkyHook input path.
-- `TimeOffset`: Trigger offset in milliseconds.
-- `EnableArrowTimeAdjust` / `EnableKeyAdjust` / `AdjustStep`: Runtime hotkey adjustment controls.
-- `InputMode`: Low-level input mode (Auto / NtUserInjectKeyboard / NtUserSendInput / SendInput).
-- `EnableDeathKey`, `DeathKeyDelay`, `DeathKeyInput`: Death-key behavior.
-- `EnableKeyFilter`, `FilterMode`, `FilteredKeys`, `FilteredAsyncKeys`: Input filtering behavior.
+---
 
-## Installation
+## 1. Feature Overview
 
-1. Install **UnityModManager** and ensure ADOFAI can load UMM mods.
-2. Build this project and get `BaseMacro.dll` (and required dependencies).
-3. Copy output files into the corresponding `Mods/BaseMacro` directory.
-4. Launch the game and enable `BaseMacro` in the UMM panel.
+BaseMacro includes the following core capabilities:
 
-> The repository includes `InputSystem.dll`, which is loaded at runtime by `InputSystem.Initialize()`.
+- **Automatic macro triggering** based on chart/floor timing.
+- **Dual trigger paths**:
+  - Direct game logic call via `controller.Hit(false)`.
+  - Keyboard simulation through system APIs (SendInput / SkyHook-related path).
+- **SkyHook async input mode** for high-frequency scenarios with better stability under stress.
+- **Timing offset tuning** with in-game hotkey adjustment support.
+- **Death Key support** with configurable key and delay (SkyHook mode required).
+- **Key filtering system** with blacklist/whitelist logic for sync and async key sources.
+- **Bilingual UI** with Chinese/English switch in the settings panel.
 
-## Build Notes
+---
 
-This project is a .NET Framework C# project (`BaseMacro.csproj`) and references several game-managed DLLs (such as `Assembly-CSharp.dll`, `UnityEngine.dll`, and `SkyHook.Unity.dll`).
+## 2. How Input Modes Work
 
-For local builds:
+### 2.1 Direct Hit mode (`SimulateKeyPress = false`)
 
-1. Make sure the `HintPath` entries in `BaseMacro.csproj` point to your ADOFAI installation path.
-2. Build `Release` using Visual Studio or MSBuild.
-3. Restore NuGet packages first if required (`packages.config` style).
+- Triggers direct game hit logic.
+- Pros: short path, predictable latency.
+- Best for: users who only need macro timing and do not need OS-level key injection.
 
-## Usage Tips
+### 2.2 Simulated Key mode (`SimulateKeyPress = true`)
 
-- When `SimulateKeyPress` is enabled, verify `MacroKeys` first.
-- If you use `SkyHookMode`, test with short levels before long runs.
-- If you hit input conflicts, try:
-  - Switching `InputMode`;
-  - Comparing behavior with `SkyHookMode` on/off;
-  - Configuring key filters to avoid duplicate input sources.
+- Converts macro events into system keyboard input.
+- Available paths:
+  - **SendInput** (compatibility-first)
+  - **SkyHook** (lower-level path, often preferred for advanced/high-frequency cases)
 
-## Licenses
+### 2.3 SkyHook + `InputMode`
 
-- Main project license: `LICENSE.txt`.
-- Async input optimization license: `AsyncInputOptimize-LICENSE.txt`.
+When `SkyHookMode = true`, you can select the lower-layer mode:
+
+- `Auto`: automatically pick the lowest available implementation.
+- `NtUserInjectKeyboard`: deeper injection route.
+- `NtUserSendInput`: lower than standard SendInput.
+- `SendInput`: standard Win32 method (best compatibility).
+
+> Start from `Auto`, then switch mode only if you encounter instability or conflicts.
+
+---
+
+## 3. Installation and Update
+
+### 3.1 Requirements
+
+- **UnityModManager** installed and working.
+- ADOFAI configured to load UMM mods.
+
+### 3.2 Installation Steps
+
+1. Build the project and obtain `BaseMacro.dll` (plus required dependencies).
+2. Create or locate `Mods/BaseMacro` in your UMM mods directory.
+3. Copy output DLLs/files into that folder.
+4. Launch the game and enable `BaseMacro` from UMM.
+
+### 3.3 Update Tips
+
+- Back up your old config before replacing files.
+- After updating, verify key options on first launch:
+  - `MacroKeys`
+  - `TimeOffset`
+  - `SkyHookMode` / `InputMode`
+  - `EnableKeyFilter` and filter lists
+
+> This repository includes `InputSystem.dll`, loaded at runtime by `InputSystem.Initialize()`.
+
+---
+
+## 4. Build Guide (Developers)
+
+This is a **.NET Framework** C# project (`BaseMacro.csproj`) that references several DLLs from your local ADOFAI installation.
+
+### 4.1 Common Dependencies
+
+- `Assembly-CSharp.dll`
+- `UnityEngine.dll`
+- `UnityEngine.CoreModule.dll`
+- `SkyHook.Unity.dll`
+
+### 4.2 Local Build Flow
+
+1. Update `HintPath` values in `BaseMacro.csproj` to match your local ADOFAI path.
+2. Restore NuGet packages if needed (`packages.config` style).
+3. Build `Release` with Visual Studio or MSBuild.
+4. Copy outputs into `Mods/BaseMacro` for live verification.
+
+---
+
+## 5. Settings Reference
+
+All settings below are available in the UMM panel.
+
+| Setting | Type / Example | Description |
+|---|---|---|
+| `Macro` | `true / false` | Master switch for macro logic. |
+| `MacroKeys` | `D,F,J,K` | Comma-separated key sequence for macro output. |
+| `SimulateKeyPress` | `true / false` | Use system key simulation instead of direct hit calls. |
+| `SkyHookMode` | `true / false` | Enable SkyHook path for simulated input. |
+| `InputMode` | `Auto / NtInject / NtSendInput / SendInput` | Input backend selection when SkyHook mode is enabled. |
+| `TimeOffset` | `-100 ~ 100` ms | Trigger timing offset in milliseconds. |
+| `EnableKeyAdjust` | `true / false` | Enable runtime offset/step adjustment with `Ctrl + Arrow`. |
+| `AdjustStep` | `0.1 ~ 10` | Step size for each runtime adjustment. |
+| `EnableArrowTimeAdjust` | `true / false` | Enable Left/Right key adjustment for timing offset. |
+| `HighPrecisionAsync` | `true / false` | Experimental high-precision async behavior. |
+| `EnableDeathKey` | `true / false` | Auto-press a key on death (SkyHook mode required). |
+| `DeathKeyDelay` | `0.1 ~ 30` sec | Delay before death key is fired. |
+| `DeathKeyInput` | `R`, `SPACE`, `0x52` | Death key by key name or virtual key code. |
+| `EnableKeyFilter` | `true / false` | Enable key filtering system. |
+| `FilterMode` | `0 / 1` | `0` = blacklist, `1` = whitelist. |
+| `FilteredKeys` | `F1,F2` | Sync input filter list. |
+| `FilteredAsyncKeys` | `J,K,L` | Async input filter list (typically used with SkyHook). |
+
+### 5.1 Key String Format
+
+- Supports key names: `A-Z`, `0-9`, `F1-F12`, `SPACE`, `ENTER`, `ESC`, `CTRL`, `ALT`, arrows, etc.
+- Supports hex virtual key code format (for example: `0x41`).
+- Separate multiple keys with commas (for example: `J,K,L`).
+
+---
+
+## 6. Runtime Tuning & Hotkeys
+
+Depending on your toggles, you can tune behavior during gameplay:
+
+- **Ctrl + Left/Right**: adjust offset/step behavior based on `AdjustStep`.
+- **Left/Right**: directly nudge timing offset (`EnableArrowTimeAdjust` required).
+
+For reliability, tune on short levels first, then apply the profile to longer/harder charts.
+
+---
+
+## 7. Recommended Presets
+
+### 7.1 Stable Starter Preset
+
+- `Macro = true`
+- `SimulateKeyPress = false`
+- `TimeOffset = 0` (then fine-tune gradually)
+- `EnableKeyFilter = false` (verify baseline first)
+
+### 7.2 Compatibility-Oriented Preset
+
+- `SimulateKeyPress = true`
+- `SkyHookMode = false`
+- Use `SendInput`
+- Enable key filtering only if you detect conflicts
+
+### 7.3 High-Frequency / Advanced Preset
+
+- `SimulateKeyPress = true`
+- `SkyHookMode = true`
+- Start with `InputMode = Auto`, then manually test alternatives if needed
+- Fine-tune `TimeOffset` and `AdjustStep` incrementally
+
+---
+
+## 8. Troubleshooting
+
+### Q1: Macro is enabled but nothing happens
+
+Check in order:
+
+1. `BaseMacro` is enabled in UMM.
+2. `Macro` toggle is on.
+3. `MacroKeys` format is valid (comma-separated).
+4. If simulation is enabled, test with different `SkyHookMode` / `InputMode` combinations.
+
+### Q2: Inconsistent triggers or dropped presses
+
+- Tune `TimeOffset` in small steps (e.g., 1ms increments).
+- Try enabling `SkyHookMode` for high-frequency charts.
+- Enable key filtering to isolate conflicting input sources.
+
+### Q3: Death key is not firing
+
+- Confirm `SkyHookMode` is enabled.
+- Confirm `EnableDeathKey` is on.
+- Validate `DeathKeyInput` key name/code.
+- Increase `DeathKeyDelay` and retest.
+
+### Q4: Key filtering seems ineffective
+
+- Confirm `EnableKeyFilter = true`.
+- Verify `FilterMode` matches your intention (blacklist vs whitelist).
+- In SkyHook scenarios, ensure `FilteredAsyncKeys` is also configured.
+
+---
+
+## 9. Project Structure
+
+```text
+BaseMacro/
+├─ Main.cs                 # Entry and mod lifecycle
+├─ Settings.cs             # Settings and UMM UI
+├─ UIUtils.cs              # UI helper components/styles
+├─ ShowText.cs             # Text/overlay helper
+├─ Patches.cs              # Harmony patch definitions
+├─ Macro/
+│  ├─ Macro.cs             # Core macro triggering logic
+│  ├─ InputSystem.cs       # Input abstraction / backend bridge
+│  ├─ AsyncInputManager.cs # Async input management
+│  ├─ DSPTimeSimulater.cs  # Timing simulation helper
+│  └─ SkyHookSystem.cs     # SkyHook-specific handling
+└─ Platform/
+   ├─ Windows.cs           # Windows platform implementation
+   ├─ Linux.cs             # Linux platform implementation
+   └─ BaseSelect.cs        # Platform selection layer
+```
+
+---
+
+## 10. License
+
+- Main project license: `LICENSE.txt`
+- Async input optimization license: `AsyncInputOptimize-LICENSE.txt`
+
+---
+
+If you report an issue, include:
+
+- Game version
+- BaseMacro version
+- Relevant settings (screenshot preferred)
+- Whether SkyHook is enabled and current `InputMode`
+- Reproduction steps and logs
