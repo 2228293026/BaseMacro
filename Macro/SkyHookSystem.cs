@@ -37,7 +37,7 @@ namespace BaseMacro.Macro
             public ushort Key;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public long GetTimeInTicks() =>
+            public readonly long GetTimeInTicks() =>
                 TimeSec * 10000000L + (long)(TimeSubsecNano / 100U) + EpochTicks;
 
             /// <summary>

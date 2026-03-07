@@ -18,28 +18,21 @@ namespace BaseMacro.Macro
         [DllImport("winmm.dll")] private static extern uint timeEndPeriod(uint p);
 
         // ══════════════════════════════════════════════════════
-        //  环形缓冲区
+        //  环形缓冲区（保留，供未来批量统计等用途；热路径不再走此路径）
         //  8192 而非 4096：更大的缓冲区在突发场景下减少丢弃
         // ══════════════════════════════════════════════════════
         private const int BUFFER_SIZE = 8192;
         private const int BUFFER_MASK = BUFFER_SIZE - 1;
 
-        // SkyHookEvent 数组：结构体数组，内存连续，缓存友好
         private static readonly SkyHookEvent[] _ring = new SkyHookEvent[BUFFER_SIZE];
 
-        // 读写指针：volatile 保证可见性
-        // 不用 PaddedIndices 结构体（Mono FieldOffset 访问比直接字段慢）
         private static volatile int _writeIndex = 0;
         private static volatile int _readIndex = 0;
 
         private static volatile bool _isInitialized = false;
         private static volatile bool _isRunning = false;
-        private static Thread? _workerThread;
 
-        // 统计
-        // Bug1 修复：_totalDropped 由两个线程写（生产者: EnqueueEvent/EnqueueEvents；
-        // 消费者: ConsumeLoop），改用 Interlocked 操作保证 32-bit Mono 下原子性。
-        // _totalProcessed 仅由消费者写，无竞争，保持普通 long。
+        // 统计（跨线程写用 Interlocked）
         private static long _totalProcessed = 0;
         private static long _totalDropped = 0;
 
@@ -47,6 +40,20 @@ namespace BaseMacro.Macro
 
         // ══════════════════════════════════════════════════════
         //  启动
+        //
+        //  修复：移除 Start() 内的强制 Gen2 GC。
+        //  原代码在此处调用三次阻塞式 GC（50~200ms），若在关卡进行中切换模式，
+        //  主线程会卡顿导致锚点时间数据失效、音符触发全部偏移。
+        //  GC 预热应在模组加载入口（Main.OnLoad）执行一次，远离关卡运行期。
+        //
+        //  修复：不再启动内部消费者线程。
+        //  热路径已改为工作线程直接调用 InputSystem.PushKeyEvent()，
+        //  中间的 ring buffer → ConsumeLoop → SpinWait 链路（0~1ms 抖动）已彻底消除。
+        //  AsyncInputManager 现在只负责：
+        //    ① 初始化 / 清理 C++ InputSystem 资源
+        //    ② timeBeginPeriod(1) 保证 Sleep(1) 精度
+        //    ③ GC LatencyMode 切换
+        //    ④ 统计（可选）
         // ══════════════════════════════════════════════════════
         public static void Start()
         {
@@ -59,40 +66,28 @@ namespace BaseMacro.Macro
             try
             {
                 // ① 时钟精度 15.6ms → 1ms
-                //    SpinWait 退化到 Sleep(1) 时，精度从 15.6ms 变成 1ms
-                //    这是 4000/s 稳定性的基础保障
+                //    工作线程 Sleep(1) 退化时，精度从 15.6ms 变成 1ms
                 timeBeginPeriod(1);
 
                 // ② GC 低延迟模式
-                //    SustainedLowLatency：允许 Gen0/1 GC，但抑制 Gen2 阻塞式 GC
-                //    避免 50-200ms 的 Stop-the-World 打断工作线程
+                //    SustainedLowLatency：允许 Gen0/1 GC，抑制 Gen2 阻塞式 GC
+                //    避免 50-200ms Stop-the-World 打断工作线程
                 System.Runtime.GCSettings.LatencyMode =
                     System.Runtime.GCLatencyMode.SustainedLowLatency;
 
-                // ③ 提前触发一次完整 GC，清理堆，减少运行期 GC 概率
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
-                GC.WaitForPendingFinalizers();
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
-
+                // ③ 重置统计
                 _writeIndex = 0;
                 _readIndex = 0;
                 _totalProcessed = 0;
                 _totalDropped = 0;
 
+                // ④ 初始化并启动 C++ 处理层
                 InputSystem.StartProcessing();
 
                 _isRunning = true;
                 _isInitialized = true;
 
-                _workerThread = new Thread(WorkerLoop)
-                {
-                    IsBackground = true,
-                    Priority = ThreadPriority.Highest,
-                    Name = "InputSystem-Worker"
-                };
-                _workerThread.Start();
-
-                Macro.Log("[InputSystem] 启动成功");
+                Macro.Log("[InputSystem] 启动成功（直接调用模式）");
             }
             catch (Exception ex)
             {
@@ -111,8 +106,6 @@ namespace BaseMacro.Macro
             if (!_isInitialized) return;
 
             _isRunning = false;
-            _workerThread?.Join(TimeSpan.FromSeconds(2));
-            _workerThread = null;
 
             InputSystem.EmergencyStop();
             InputSystem.StopProcessing();
@@ -126,152 +119,71 @@ namespace BaseMacro.Macro
         }
 
         // ══════════════════════════════════════════════════════
-        //  工作线程
+        //  直接调用入口（热路径，由 Macro 工作线程调用）
+        //
+        //  修复前：工作线程 → EnqueueEvent → ring buffer → ConsumeLoop → PushKeyEvent
+        //          中间 SpinWait 退化 Sleep(1) 引入 0~1ms 不可控抖动
+        //          PushKeyEvent 传 delayMs=0，SkyHookEvent 时间戳被完全丢弃
+        //
+        //  修复后：工作线程 → PushKeyEvent（直接，零队列）
+        //          工作线程已精确等待到触发时刻，delayMs=0 语义正确（立刻执行）
+        //          与 SendInput 模式延迟链等长，理论精度一致
         // ══════════════════════════════════════════════════════
-        private static void WorkerLoop()
-        {
-            Macro.Log("[InputSystem] 工作线程启动");
-
-            // ④ 锁定 CLR 不迁移到其他 OS 线程
-            //    防止线程迁移导致 CPU 缓存失效，Unity 安全，无需 P/Invoke
-            Thread.BeginThreadAffinity();
-
-            // ⑤ JIT 预热：让热路径在正式运行前完成编译
-            //    避免第一批事件触发 JIT 编译导致的初始抖动
-            WarmUp();
-
-            try
-            {
-                ConsumeLoop();
-            }
-            finally
-            {
-                Thread.EndThreadAffinity();
-                Macro.Log("[InputSystem] 工作线程退出");
-            }
-        }
-
-        // ⑤ JIT 预热：空跑一次所有热路径代码，触发 JIT 编译
-        [MethodImpl(MethodImplOptions.NoInlining)] // 不内联，确保独立 JIT
-        private static void WarmUp()
-        {
-            // 空跑 PushKeyEvent（用不存在的 key，DLL 会忽略或报错，但 JIT 已完成）
-            InputSystem.PushKeyEvent(0xFF, false, 0);
-
-            // 空跑环形缓冲区读取逻辑
-            int r = _readIndex;
-            int w = _writeIndex;
-            if (r != w) // 一定为 false（刚启动），但 JIT 会编译这段代码
-            {
-                ref readonly SkyHookEvent e = ref _ring[r & BUFFER_MASK];
-                InputSystem.PushKeyEvent((byte)e.Key, e.Type == global::SkyHook.EventType.KeyPressed, 0);
-            }
-        }
-
-        // ⑥ 消费主循环：单独提取为方法，让 JIT 对其独立优化
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ConsumeLoop()
+        public static int DirectPushKey(byte keyCode, bool isDown)
         {
-            var spinner = new SpinWait();
+            if (!_isInitialized) return -1;
 
-            // 用局部变量缓存读指针，避免每次循环重复读 volatile 字段
-            int localRead = _readIndex;
+            int result = InputSystem.PushKeyEvent(keyCode, isDown, 0);
 
-            while (_isRunning)
-            {
-                int localWrite = _writeIndex; // volatile 读，感知生产者写入
+            // 统计（非热路径分支，result!=0 极少发生）
+            if (result == 0)
+                // 仅消费者自己写 _totalProcessed，无竞争，直接 ++
+                _totalProcessed++;
+            else
+                Interlocked.Increment(ref _totalDropped);
 
-                if (localRead == localWrite)
-                {
-                    // 队列空：SpinWait 自适应等待
-                    // 在 timeBeginPeriod(1) 下，即使退化到 Sleep(1) 也只有 1ms
-                    spinner.SpinOnce();
-                    continue;
-                }
-
-                // 有数据：重置自旋计数，进入消费模式
-                spinner.Reset();
-
-                // ⑦ 批量消费：内层循环不做任何 volatile/Interlocked 操作
-                //    全程用局部变量 localRead/localWrite，最后一次性提交
-                while (localRead != localWrite)
-                {
-                    ref readonly SkyHookEvent evt = ref _ring[localRead & BUFFER_MASK];
-
-                    // InputSystem.PushKeyEvent 의 세 번째 파라미터(타임스탬프)에
-                    // evt.GetTimeInTicks() (~6.38e17, 절대 .NET DateTime ticks) 를 전달하면
-                    // SkyHook 내부에서 "미래 이벤트"로 판정되어 드롭될 가능성이 높다.
-                    // PushKeyEvent 가 기대하는 단위(프로세스 기동 후 경과 틱, 혹은 다른 기준)를
-                    // 확인하기 전까지는 0 을 전달한다.
-                    // 0 = "지금 즉시"로 해석되며, 이벤트가 드롭 없이 바로 처리된다.
-                    int result = InputSystem.PushKeyEvent(
-                        (byte)evt.Key,
-                        evt.Type == global::SkyHook.EventType.KeyPressed,
-                        0);
-
-                    // ⑧ 统计用局部变量累加，退出循环后一次性写回
-                    //    避免每次 Interlocked 操作
-                    if (result == 0) _totalProcessed++;
-                    else if (result == -2) Interlocked.Increment(ref _totalDropped); // Bug1: 跨线程写
-
-                    localRead++;
-
-                    // 每消费 16 个事件刷新一次 localWrite
-                    // 平衡"感知新事件"和"volatile 读开销"
-                    if ((localRead & 15) == 0)
-                        localWrite = _writeIndex;
-                }
-
-                // ⑦ 批量提交读指针：使用"只进不退"的 CAS 循环
-                //
-                // Bug2 修复：原 Interlocked.Exchange(ref _readIndex, localRead) 会无条件覆写 _readIndex。
-                // ClearQueue() 由主线程调用，会将 _readIndex 推进到 _writeIndex（跳过所有待处理事件）。
-                // 若 ClearQueue 在本批次处理期间执行：
-                //   - ClearQueue 将 _readIndex 从 10 推进到 500
-                //   - 本批次 localRead 处理完后为 200（批次开始前快照的 localWrite）
-                //   - Exchange 将 _readIndex 从 500 退回到 200
-                //   - 消费者重新"看到"200~499 这 300 个已被清除的旧事件，重复触发
-                //
-                // 修复：用 CAS 循环保证 _readIndex 只能向前移动，永不后退。
-                // 若 CAS 失败说明 ClearQueue 已推进到更高值，直接接受该值作为新 localRead。
-                {
-                    int current;
-                    do
-                    {
-                        current = _readIndex;
-                        if (current >= localRead)
-                        {
-                            // ClearQueue 已经把指针推过了我们的 localRead（或相等）
-                            // 接受更高的值，跳过中间的已清除事件
-                            localRead = current;
-                            break;
-                        }
-                    } while (Interlocked.CompareExchange(ref _readIndex, localRead, current) != current);
-                }
-            }
+            return result;
         }
 
         // ══════════════════════════════════════════════════════
-        //  生产者入队
+        //  队列清空（Reset 时调用，清除 C++ 内部残留事件）
+        // ══════════════════════════════════════════════════════
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ClearQueue()
+        {
+            // 同步 ring buffer 指针（保持内部一致性）
+            Interlocked.Exchange(ref _readIndex, _writeIndex);
+
+            // 清空 C++ 层内部队列
+            if (_isInitialized)
+                InputSystem.ClearQueue();
+
+            Macro.Log("[InputSystem] 队列已清空");
+        }
+
+        // ══════════════════════════════════════════════════════
+        //  保留的 EnqueueEvent / EnqueueEvents
+        //
+        //  说明：热路径（Macro.SendKey）已改为 DirectPushKey，
+        //  这两个方法不再被主流程调用，但保留接口供外部扩展或调试使用。
+        //  若确认不需要可安全删除。
         // ══════════════════════════════════════════════════════
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void EnqueueEvent(SkyHookEvent evt)
         {
             if (!_isInitialized) return;
 
-            // 生产者私有：_writeIndex 只有生产者写，读不需要 Volatile
             int write = _writeIndex;
-            int read = _readIndex; // volatile 读，感知消费者进度
+            int read = _readIndex;
 
             if ((write - read) >= BUFFER_SIZE)
             {
-                Interlocked.Increment(ref _totalDropped); // Bug1 修复：Interlocked
+                Interlocked.Increment(ref _totalDropped);
                 return;
             }
 
             _ring[write & BUFFER_MASK] = evt;
-
-            // 写屏障：保证数据写入对消费者可见后再移动指针
             Interlocked.Increment(ref _writeIndex);
         }
 
@@ -280,7 +192,6 @@ namespace BaseMacro.Macro
         {
             if (!_isInitialized || events == null || events.Length == 0) return;
 
-            // 批量入队：一次检查空间，批量写入，一次提交指针
             int write = _writeIndex;
             int read = _readIndex;
             int space = BUFFER_SIZE - (write - read);
@@ -288,7 +199,7 @@ namespace BaseMacro.Macro
 
             int dropped = events.Length - count;
             if (dropped > 0)
-                Interlocked.Add(ref _totalDropped, dropped); // Bug1 修复：Interlocked
+                Interlocked.Add(ref _totalDropped, dropped);
 
             for (int i = 0; i < count; i++)
                 _ring[(write + i) & BUFFER_MASK] = events[i];
@@ -296,15 +207,9 @@ namespace BaseMacro.Macro
             Interlocked.Add(ref _writeIndex, count);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void ClearQueue()
-        {
-            // 将 _readIndex 推进到当前 _writeIndex：跳过所有已入队事件
-            // ConsumeLoop 用"只进不退"CAS 保证不会退回到更低值（见 Bug2 修复注释）
-            Interlocked.Exchange(ref _readIndex, _writeIndex);
-            Macro.Log("[InputSystem] 队列已清空");
-        }
-
+        // ══════════════════════════════════════════════════════
+        //  统计
+        // ══════════════════════════════════════════════════════
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static (int queueSize, long processed, long dropped) GetStats() =>
             (_writeIndex - _readIndex, _totalProcessed, Interlocked.Read(ref _totalDropped));

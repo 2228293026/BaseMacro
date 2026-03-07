@@ -72,9 +72,9 @@ namespace BaseMacro.Macro
             public TimeAnchor() { keyCodesSnapshot = []; }
         }
 
-        private static TimeAnchor _anchorA = new();
-        private static TimeAnchor _anchorB = new();
-        private static volatile TimeAnchor _currentAnchor = new();
+        private static readonly TimeAnchor _anchorA = new();
+        private static readonly TimeAnchor _anchorB = new();
+        private static volatile TimeAnchor _currentAnchor = _anchorA; // ← 必须在 A/B 之后
 
         // 参考点（主线程独占写，仅在 Initialize 和 pitch 变化时更新）
         // 复制到每帧的 anchor 中，保证工作线程读到 (songPosRef, dspTimeRef, pitch) 一致快照
@@ -220,6 +220,7 @@ namespace BaseMacro.Macro
             ["PAGEDOWN"] = 0x22,
         };
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static Macro()
         {
             usePerfCounter = QueryPerformanceFrequency(out perfFrequency);
@@ -259,11 +260,8 @@ namespace BaseMacro.Macro
                 if (!initialized) return;
             }
 
-            if (Interlocked.Exchange(ref _workerNeedsHit, 0) != 0)
-            {
-                controller!.Hit(false);
-                Log("[Macro-Main] controller.Hit() 已调用");
-            }
+            int hitCount = Interlocked.Exchange(ref _workerNeedsHit, 0);
+            for (int h = 0; h < hitCount; h++) controller!.Hit(false);
 
             // 仅 DEBUG 构建用于日志；Release 下 Log 被 [Conditional] 裁剪，volatile read 也随之省去
 #if DEBUG
@@ -313,6 +311,7 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  工作线程：自旋 + 精确计时触发
         // ═══════════════════════════════════════════════════════════════
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WorkerLoop()
         {
             Log("[Macro-Worker] 工作线程启动");
@@ -427,7 +426,7 @@ namespace BaseMacro.Macro
                         // 设 i：for 循环自然走到 i+1，时机到则触发，未到则 break 留到下次。
                         localLastFloor = i;
                     }
-                    else if (simulateKey) // keys.Length >= 1 由 ParseKeyCodes 保证（fallback 0x4A）
+                    else // keys.Length >= 1 由 ParseKeyCodes 保证（fallback 0x4A）
                     {
                         byte key = keys[localKeyIndex % keys.Length];
                         WorkerPressKey(key);
@@ -448,7 +447,8 @@ namespace BaseMacro.Macro
                     Volatile.Write(ref _workerKeyIndex, localKeyIndex);
                 }
                 if (hitNeeded)
-                    Volatile.Write(ref _workerNeedsHit, 1); // 只需 release fence，无需 Interlocked 全栅
+                    Interlocked.Increment(ref _workerNeedsHit);
+                //Volatile.Write(ref _workerNeedsHit, 1); // 只需 release fence，无需 Interlocked 全栅
             }
 
             WorkerReleaseKey();
@@ -487,25 +487,10 @@ namespace BaseMacro.Macro
         {
             if (_cachedSkyHookMode)
             {
-                // SkyHookEvent.TimeSec = 从1970起的Unix秒数，TimeSubsecNano = 纳秒余数。
-                // GetTimeInTicks() = TimeSec*10_000_000 + TimeSubsecNano/100 + EpochTicks
-                //                  = unixTicks + EpochTicks = DateTime.UtcNow.Ticks ← 正确绝对时间
-                //
-                // 旧方案用 QPC 相对时间（elapsed = qpcDelta / freq * 10_000_000）：
-                //   Create(elapsed) → TimeSec = elapsed/10_000_000（从本次session起的秒数）
-                //   GetTimeInTicks() = elapsed + EpochTicks（1970年 + 几秒 ≠ 当前时刻）
-                //   → InputSystem.PushKeyEvent 收到错误的绝对时间戳，调度全部偏移
-                //
-                // 新方案：DateTime.UtcNow.Ticks - _unixEpochTicks = 从1970起的100ns滴答数
-                //   Create(unixTicks) → TimeSec = Unix秒，TimeSubsecNano = 纳秒余数
-                //   GetTimeInTicks() = unixTicks + EpochTicks = DateTime.UtcNow.Ticks ✓
-                //
-                // DateTime.UtcNow 在 Windows 底层调用缓存的 GetSystemTimeAsFileTime，
-                // 精度约 100ns，性能约 10-20ns，无系统调用开销，完全符合热路径要求。
-                long elapsed = DateTime.UtcNow.Ticks - _unixEpochTicks;
-                AsyncInputManager.EnqueueEvent(
-                    SkyHookSystem.SkyHookEvent.Create(keyCode, isDown, elapsed));
-                Log($"[Macro-Worker] SkyHook key=0x{keyCode:X2} down={isDown}");
+                int result = AsyncInputManager.DirectPushKey(keyCode, isDown);
+                if (result != 0)
+                    Log($"[Macro-Worker] PushKeyEvent 失败 result={result} key=0x{keyCode:X2}");
+                Log($"[Macro-Worker] SkyHook direct key=0x{keyCode:X2} down={isDown}");
             }
             else
             {
@@ -551,6 +536,7 @@ namespace BaseMacro.Macro
             _anchorA.qpcSnapshot = _anchorB.qpcSnapshot = initQpc;
 
             int syncFloor = SyncFloor(_songPosRef);
+            //SyncLastTriggeredFloor(_songPosRef);
             Volatile.Write(ref _workerLastTriggeredFloor, syncFloor);
             Volatile.Write(ref _workerKeyIndex, 0);
 
@@ -573,11 +559,27 @@ namespace BaseMacro.Macro
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SyncLastTriggeredFloor(double currentTime)
+        {
+            if (triggerTimes == null || triggerTimes.Length == 0) return;
+
+            int left = 0, right = triggerTimes.Length - 1;
+            while (left <= right)
+            {
+                int mid = (left + right) >> 1;
+                if (triggerTimes[mid] < currentTime) left = mid + 1;
+                else if (triggerTimes[mid] > currentTime) right = mid - 1;
+                else { _workerLastTriggeredFloor = mid; return; }
+            }
+            _workerLastTriggeredFloor = left - 1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool NeedReinitialize()
         {
             // levelMaker 在 initialized=true 时必然非 null（Initialize 负责赋值）
             // ResetState 会把 initialized 设为 false，所以 levelMaker==null 时走不到这里
-            return levelMaker!.listFloors == null || levelMaker.listFloors.Count != floorCount;
+            return levelMaker?.listFloors.Count != floorCount;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -619,6 +621,7 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  生命周期
         // ═══════════════════════════════════════════════════════════════
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Reset(scrController controller) => ResetState(controller);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -640,12 +643,14 @@ namespace BaseMacro.Macro
             // 若 valid=false 在 Increment 之后写，工作线程检测到版本变化时
             // 仍可能看到 valid=true，继续执行一轮 floor-0 触发（幻按）。
             // 正确顺序：valid=false → Increment（full fence）→ 工作线程 acquire → 看到 valid=false
-            var anchor = Volatile.Read(ref _currentAnchor);
-            Volatile.Write(ref anchor.valid, false);
+            _anchorA.valid = false;
+            _anchorB.valid = false;
 
             Interlocked.Increment(ref _resetVersion);
 
-            AsyncInputManager.ClearQueue();
+            // Macro.cs — ResetState
+            if (skyHookInitialized)
+                AsyncInputManager.ClearQueue(); // 原来无条件调用，现在加守卫
 
             if (controller != null)
                 ApplyHoldBehavior(controller);
@@ -660,7 +665,7 @@ namespace BaseMacro.Macro
             _workerThread = new Thread(WorkerLoop)
             {
                 IsBackground = true,
-                Priority = System.Threading.ThreadPriority.AboveNormal,
+                Priority = System.Threading.ThreadPriority.Highest,
                 Name = "MacroWorkerThread"
             };
             _workerThread.Start();
