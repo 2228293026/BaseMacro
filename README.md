@@ -2,63 +2,252 @@
 
 [English README](README.en.md)
 
-`BaseMacro` 是一个用于 **A Dance of Fire and Ice (ADOFAI)** 的 UnityModManager 模组，提供宏触发、按键模拟、异步输入与输入过滤等功能。
+`BaseMacro` 是一个用于 **A Dance of Fire and Ice (ADOFAI)** 的 UnityModManager（UMM）模组，核心目标是提供更稳定、可调、可过滤的自动输入能力，覆盖从“直接判定触发”到“系统级按键模拟”的多种使用场景。
 
-## 功能概览
+---
 
-- **自动宏触发**：根据谱面楼层时间自动触发输入。  
-- **两种触发方式**：
-  - 直接调用 `controller.Hit(false)`。
-  - 模拟键盘按键（SendInput / SkyHook）。
-- **SkyHook 异步输入模式**：支持在高频输入场景下减少抖动。
-- **时间偏移与热键微调**：支持使用方向键快速调整偏移与步长。
-- **死亡后按键（Death Key）**：可配置死亡时触发的键和延迟。
-- **按键过滤**：支持同步/异步输入过滤配置。
-- **中英文 UI 切换**：可在设置中切换显示语言。
+## 目录
 
-## 主要配置项
+- [1. 功能简介](#1-功能简介)
+- [2. 工作模式说明](#2-工作模式说明)
+- [3. 安装与更新](#3-安装与更新)
+- [4. 构建说明（开发者）](#4-构建说明开发者)
+- [5. 设置项详细说明](#5-设置项详细说明)
+- [6. 运行时快捷键与调参](#6-运行时快捷键与调参)
+- [7. 推荐配置](#7-推荐配置)
+- [8. 常见问题与排查](#8-常见问题与排查)
+- [9. 项目结构概览](#9-项目结构概览)
+- [10. 许可证](#10-许可证)
 
-在 Mod 的设置面板中可见（来自 `Settings.cs`）：
+---
 
-- `Macro`：宏总开关。
-- `MacroKeys`：宏按键序列（逗号分隔，如 `J,K,L`）。
-- `SimulateKeyPress`：使用按键模拟而非直接 Hit。
-- `SkyHookMode`：启用 SkyHook 路径。
-- `TimeOffset`：触发时间偏移（ms）。
-- `EnableArrowTimeAdjust` / `EnableKeyAdjust` / `AdjustStep`：运行时快捷调整。
-- `InputMode`：底层输入模式选择（Auto / NtUserInjectKeyboard / NtUserSendInput / SendInput）。
-- `EnableDeathKey`、`DeathKeyDelay`、`DeathKeyInput`：死亡按键配置。
-- `EnableKeyFilter`、`FilterMode`、`FilteredKeys`、`FilteredAsyncKeys`：输入过滤。
+## 1. 功能简介
 
-## 安装
+BaseMacro 提供以下核心能力：
 
-1. 安装 **UnityModManager** 并确保游戏可加载 UMM 模组。
-2. 编译本项目，得到 `BaseMacro.dll`（以及所需依赖）。
-3. 将输出文件放入 UMM 对应的 `Mods/BaseMacro` 目录。
+- **自动宏触发**：根据谱面时间点自动触发输入。
+- **双触发路径**：
+  - 直接调用游戏逻辑层 `controller.Hit(false)`。
+  - 通过系统按键模拟触发（SendInput / SkyHook 相关路径）。
+- **SkyHook 异步输入模式**：适合高频输入场景，降低输入抖动带来的不稳定。
+- **时间偏移微调**：支持毫秒级偏移设置，并可在游戏中快速调参。
+- **死亡后自动按键（Death Key）**：可配置死亡后按键与触发延迟（依赖 SkyHook 模式）。
+- **按键过滤系统**：支持黑白名单与同步/异步按键列表，减少冲突输入。
+- **双语界面**：支持中文 / English UI 切换。
+
+---
+
+## 2. 工作模式说明
+
+### 2.1 直接 Hit 模式（`SimulateKeyPress = false`）
+
+- 宏触发时直接命中游戏逻辑。
+- 优点：链路短、延迟可控。
+- 适合：纯宏判定场景、不依赖系统按键注入的用户。
+
+### 2.2 按键模拟模式（`SimulateKeyPress = true`）
+
+- 将宏触发转换为系统层按键输入。
+- 可选：
+  - **SendInput 路径**（兼容性优先）
+  - **SkyHook 路径**（更偏底层、适合复杂/高频环境）
+
+### 2.3 SkyHook + InputMode
+
+当 `SkyHookMode = true` 时，可进一步选择输入模式：
+
+- `Auto`：自动选择可用的更低层实现。
+- `NtUserInjectKeyboard`：更低层注入路径。
+- `NtUserSendInput`：介于底层注入与标准 SendInput 之间的路径。
+- `SendInput`：标准 Win32 方式，兼容性最好。
+
+> 建议从 `Auto` 开始，遇到冲突或异常时再逐项切换测试。
+
+---
+
+## 3. 安装与更新
+
+### 3.1 前置条件
+
+- 已安装并可正常运行 **UnityModManager**。
+- ADOFAI 可通过 UMM 加载模组。
+
+### 3.2 安装步骤
+
+1. 编译项目得到 `BaseMacro.dll`（及相关依赖）。
+2. 在 UMM 模组目录创建或定位 `Mods/BaseMacro`。
+3. 将 DLL 和所需文件复制到该目录。
 4. 启动游戏，在 UMM 面板中启用 `BaseMacro`。
 
-> 仓库包含 `InputSystem.dll`，运行时会由 `InputSystem.Initialize()` 尝试加载。
+### 3.3 更新建议
 
-## 构建说明
+- 更新前备份旧版配置。
+- 覆盖新文件后，首次进游戏建议检查：
+  - `MacroKeys`
+  - `TimeOffset`
+  - `SkyHookMode` / `InputMode`
+  - `EnableKeyFilter` 配置是否符合当前习惯。
 
-本项目为 .NET Framework C# 项目（`BaseMacro.csproj`），并引用了游戏本体目录下的若干 DLL（如 `Assembly-CSharp.dll`、`UnityEngine.dll`、`SkyHook.Unity.dll`）。
+> 仓库包含 `InputSystem.dll`，运行时由 `InputSystem.Initialize()` 尝试加载。
 
-在你的本地环境中：
+---
 
-1. 确保 `BaseMacro.csproj` 中 `HintPath` 指向你机器上的 ADOFAI 安装目录。
-2. 使用 Visual Studio / MSBuild 构建 `Release`。
-3. 若缺少 NuGet 包，先执行还原（`packages.config` 模式）。
+## 4. 构建说明（开发者）
 
-## 使用提示
+本项目为 **.NET Framework** C# 项目（`BaseMacro.csproj`），依赖 ADOFAI 本体目录中的托管 DLL。
 
-- 在开启 `SimulateKeyPress` 时，建议先确认 `MacroKeys` 配置有效。
-- 如果你使用 SkyHook 模式，建议先在游戏内做短曲测试以确认输入稳定性。
-- 如果出现输入冲突，可尝试：
-  - 调整 `InputMode`；
-  - 关闭/开启 `SkyHookMode` 对比；
-  - 配置按键过滤避免重复输入源。
+### 4.1 关键依赖
 
-## 许可证
+常见引用包括（以本地环境为准）：
 
-- 项目许可证见 `LICENSE.txt`。
-- 异步输入优化相关许可见 `AsyncInputOptimize-LICENSE.txt`。
+- `Assembly-CSharp.dll`
+- `UnityEngine.dll`
+- `UnityEngine.CoreModule.dll`
+- `SkyHook.Unity.dll`
+
+### 4.2 本地构建流程
+
+1. 检查 `BaseMacro.csproj` 的 `HintPath`，指向你本机 ADOFAI 安装目录。
+2. 如需，先执行 NuGet 还原（`packages.config` 方式）。
+3. 使用 Visual Studio 或 MSBuild 构建 `Release`。
+4. 将产物复制到 UMM 模组目录进行联调。
+
+---
+
+## 5. 设置项详细说明
+
+以下设置均可在 UMM 面板中调整：
+
+| 设置项 | 类型 / 示例 | 说明 |
+|---|---|---|
+| `Macro` | `true / false` | 宏总开关。关闭后不执行宏逻辑。 |
+| `MacroKeys` | `D,F,J,K` | 宏按键序列，使用英文逗号分隔。 |
+| `SimulateKeyPress` | `true / false` | 是否用系统按键模拟替代直接 Hit。 |
+| `SkyHookMode` | `true / false` | 按键模拟时是否使用 SkyHook 路径。 |
+| `InputMode` | `Auto / NtInject / NtSendInput / SendInput` | SkyHook 模式下的底层输入方式。 |
+| `TimeOffset` | `-100 ~ 100` (ms) | 宏触发时间偏移（毫秒）。 |
+| `EnableKeyAdjust` | `true / false` | 允许在游戏中使用 `Ctrl + 方向键` 调整。 |
+| `AdjustStep` | `0.1 ~ 10` | 每次热键调整时的步长。 |
+| `EnableArrowTimeAdjust` | `true / false` | 允许用左右键快速调整延迟。 |
+| `HighPrecisionAsync` | `true / false` | 实验性高精度异步开关。 |
+| `EnableDeathKey` | `true / false` | 死亡后自动按键（需 SkyHook 模式）。 |
+| `DeathKeyDelay` | `0.1 ~ 30` | 死亡后按键触发延迟（秒）。 |
+| `DeathKeyInput` | `R` / `SPACE` / `0x52` | 死亡后按键，支持名称与虚拟键码。 |
+| `EnableKeyFilter` | `true / false` | 启用按键过滤系统。 |
+| `FilterMode` | `0/1` | 0=黑名单（阻止列表内按键）；1=白名单（仅允许列表内按键）。 |
+| `FilteredKeys` | `F1,F2` | 同步输入过滤列表。 |
+| `FilteredAsyncKeys` | `J,K,L` | 异步输入过滤列表（通常用于 SkyHook）。 |
+
+### 5.1 按键字符串格式
+
+- 支持：`A-Z`、`0-9`、`F1-F12`、`SPACE`、`ENTER`、`ESC`、`CTRL`、`ALT`、方向键等。
+- 也支持十六进制虚拟键码：如 `0x41`。
+- 多个键使用英文逗号分隔，例如：`J,K,L`。
+
+---
+
+## 6. 运行时快捷键与调参
+
+根据设置开关，游戏中可进行快速调参：
+
+- **Ctrl + 左/右方向键**：按 `AdjustStep` 调整偏移。
+- **左右方向键**：直接微调延迟（受 `EnableArrowTimeAdjust` 控制）。
+
+建议先在短图测试，确认稳定后再用于长图或高密谱。
+
+---
+
+## 7. 推荐配置
+
+### 7.1 追求稳定（入门）
+
+- `Macro = true`
+- `SimulateKeyPress = false`
+- `TimeOffset = 0`（再逐步微调）
+- `EnableKeyFilter = false`（先确认基础可用）
+
+### 7.2 追求兼容（多软件并行）
+
+- `SimulateKeyPress = true`
+- `SkyHookMode = false`
+- 使用 `SendInput` 路径
+- 必要时开启 `EnableKeyFilter` 做冲突隔离
+
+### 7.3 高频场景（进阶）
+
+- `SimulateKeyPress = true`
+- `SkyHookMode = true`
+- `InputMode = Auto` 起步，不稳再手动切换
+- 逐步微调 `TimeOffset` 与 `AdjustStep`
+
+---
+
+## 8. 常见问题与排查
+
+### Q1：宏开了但没反应
+
+请按顺序检查：
+
+1. UMM 中 `BaseMacro` 是否已启用。
+2. `Macro` 是否打开。
+3. `MacroKeys` 格式是否正确（英文逗号分隔）。
+4. 若使用模拟输入，尝试切换 `SkyHookMode` 与 `InputMode`。
+
+### Q2：有时触发、有时漏键
+
+- 先调整 `TimeOffset`（例如每次 1ms 微调）。
+- 高频场景尝试开启 `SkyHookMode`。
+- 开启 `EnableKeyFilter`，屏蔽冲突来源。
+
+### Q3：死亡后按键不生效
+
+- 确认 `SkyHookMode` 已开启。
+- 检查 `EnableDeathKey` 是否启用。
+- 检查 `DeathKeyInput` 是否为有效按键名或键码。
+- 尝试增加 `DeathKeyDelay`。
+
+### Q4：按键过滤看起来“没有作用”
+
+- 确认 `EnableKeyFilter = true`。
+- 确认 `FilterMode` 与你的目标一致（黑名单/白名单）。
+- SkyHook 场景下，别忘了设置 `FilteredAsyncKeys`。
+
+---
+
+## 9. 项目结构概览
+
+```text
+BaseMacro/
+├─ Main.cs                # 入口与 Mod 生命周期
+├─ Settings.cs            # UI 与设置定义
+├─ UIUtils.cs             # UMM 面板绘制辅助
+├─ ShowText.cs            # 文本提示相关
+├─ Patches.cs             # Harmony 补丁逻辑
+├─ Macro/
+│  ├─ Macro.cs            # 核心宏触发逻辑
+│  ├─ InputSystem.cs      # 输入系统封装
+│  ├─ AsyncInputManager.cs# 异步输入管理
+│  ├─ DSPTimeSimulater.cs # 时间模拟辅助
+│  └─ SkyHookSystem.cs    # SkyHook 相关处理
+└─ Platform/
+   ├─ Windows.cs          # Windows 平台实现
+   ├─ Linux.cs            # Linux 平台实现
+   └─ BaseSelect.cs       # 平台选择层
+```
+
+---
+
+## 10. 许可证
+
+- 项目许可证：`LICENSE.txt`
+- 异步输入优化许可：`AsyncInputOptimize-LICENSE.txt`
+
+---
+
+如果你在使用中遇到特定机型/系统版本相关问题，建议提交 issue 时附上：
+
+- 游戏版本
+- BaseMacro 版本
+- 关键配置（可截图）
+- 是否使用 SkyHook / 当前 InputMode
+- 复现步骤与日志信息
