@@ -831,7 +831,7 @@ namespace BaseMacro
             {
                 LockLevelEditor = NewLockLevelEditor;
                 if (ADOBase.sceneName == GCNS.sceneEditor)
-                ADOBase.controller.Restart();
+                    ADOBase.controller.Restart();
             }
             GUILayout.EndVertical();
         }
