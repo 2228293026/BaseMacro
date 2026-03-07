@@ -28,18 +28,6 @@ namespace BaseMacro
             Mod = modEntry;
             Settings = Settings.Load(modEntry);
 
-            Mod.Info.IsCheat = true;
-            if (Mod.Info.IsCheat)
-            {
-                Mod.Info.DisplayName += " (Cheat)";
-            }
-            if (IsDebugAssembly())
-                Mod.Info.DisplayName += " <color=grey>(Debug)</color>";
-
-            if (Settings.IsBeta)
-            {
-                Mod.Info.Version += $"\nBeta{Settings.BetaVersion}";
-            }
             // 手动初始化 InputSystem
             if (InputSystem.Initialize())
             {
@@ -80,6 +68,22 @@ namespace BaseMacro
         {
             if (value)
             {
+                if (modEntry.Info.Version != "1.1.1" || modEntry.Info.Id != "BaseMacro" || modEntry.Info.DisplayName != "Base Macro" || modEntry.Info.Author != "HitMargin" || modEntry.Info.AssemblyName != "BaseMacro.dll" || modEntry.Info.EntryMethod != "BaseMacro.Main.Load")
+                {
+                    Mod?.Logger.Error("Modifying the Info.json file is NOT allowed!");
+                    Application.Quit();
+                }
+
+                Mod?.Info.IsCheat = true;
+                if (Mod!.Info.IsCheat)
+                {
+                    Mod.Info.DisplayName += " (Cheat)";
+                }
+                if (IsDebugAssembly())
+                    Mod.Info.DisplayName += " <color=grey>(Debug)</color>";
+                if (Settings.IsBeta)
+                    Mod.Info.Version += $"\nBeta{Settings.BetaVersion}";
+
                 IsEnabled = true;
                 Harmony?.PatchAll(Assembly.GetExecutingAssembly());
                 if (_uiObject == null)

@@ -190,6 +190,7 @@ namespace BaseMacro
 
         public bool ChangeNoFaillInPlay = false;
         public bool ChangeJudementInPlay = false;
+        public bool LockLevelEditor = false;
 
         private (string input, bool focused) _deathKeyDelayState = (string.Empty, false);
 
@@ -440,7 +441,7 @@ namespace BaseMacro
             if (SimulateKeyPress)
             {
                 GUILayout.Space(2);
-                string skyHook = UseChinese ? "使用SkyHook输入(否则使用SendInput API)" : "Use SkyHook (if closed, use SendInput API)";
+                string skyHook = UseChinese ? "使用高级输入(否则使用SendInput API)" : "Use advanced input (if closed, use SendInput API)";
                 SkyHookMode = UIUtils.M3Switch(SkyHookMode, skyHook);
 
                 // ── 仅在 SkyHook 开启时显示输入模式选择 ──────────────
@@ -825,7 +826,13 @@ namespace BaseMacro
 
             ChangeNoFaillInPlay =  UIUtils.M3Switch(ChangeNoFaillInPlay, UseChinese ? "游戏中允许切换失败模式" : "The game allows switching to failure mode");
             ChangeJudementInPlay =  UIUtils.M3Switch(ChangeJudementInPlay, UseChinese ? "游戏中允许切换判定" : "Switching Judement is allowed in the game");
-
+            bool NewLockLevelEditor = UIUtils.M3Switch(LockLevelEditor, UseChinese ? "锁定关卡编辑器（防止误操作）" : "Lock Level Editor (prevent misoperation)");
+            if (LockLevelEditor != NewLockLevelEditor)
+            {
+                LockLevelEditor = NewLockLevelEditor;
+                if (ADOBase.sceneName == GCNS.sceneEditor)
+                ADOBase.controller.Restart();
+            }
             GUILayout.EndVertical();
         }
 

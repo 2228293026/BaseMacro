@@ -50,6 +50,17 @@ namespace BaseMacro
             public static void Prefix(scrController __instance) => Macro.Macro.Reset(__instance);
         }
 
+        [HarmonyPatch(typeof(scnEditor), "Start")]
+        public static class Patch_scnEdityor_Start
+        {
+            [HarmonyPostfix]
+            public static void Postfix(scnEditor __instance)
+            {
+                if (Main.Settings.LockLevelEditor)
+                    __instance.LockPathEditing(true);
+            }
+        }
+
         [HarmonyPatch(typeof(scrController), "Fail2Action")]
         public static class Patch_FailAction
         {

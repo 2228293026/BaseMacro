@@ -30,7 +30,6 @@ namespace BaseMacro.Macro
         private static volatile int _readIndex = 0;
 
         private static volatile bool _isInitialized = false;
-        private static volatile bool _isRunning = false;
 
         // 统计（跨线程写用 Interlocked）
         private static long _totalProcessed = 0;
@@ -84,7 +83,6 @@ namespace BaseMacro.Macro
                 // ④ 初始化并启动 C++ 处理层
                 InputSystem.StartProcessing();
 
-                _isRunning = true;
                 _isInitialized = true;
 
                 Macro.Log("[InputSystem] 启动成功（直接调用模式）");
@@ -92,7 +90,6 @@ namespace BaseMacro.Macro
             catch (Exception ex)
             {
                 Macro.Log($"[InputSystem] 启动失败: {ex.Message}");
-                _isRunning = false;
                 _isInitialized = false;
                 timeEndPeriod(1);
             }
@@ -104,8 +101,6 @@ namespace BaseMacro.Macro
         public static void Stop()
         {
             if (!_isInitialized) return;
-
-            _isRunning = false;
 
             InputSystem.EmergencyStop();
             InputSystem.StopProcessing();
