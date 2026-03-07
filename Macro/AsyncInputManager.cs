@@ -164,7 +164,7 @@ namespace BaseMacro.Macro
             if (r != w) // 一定为 false（刚启动），但 JIT 会编译这段代码
             {
                 ref readonly SkyHookEvent e = ref _ring[r & BUFFER_MASK];
-                InputSystem.PushKeyEvent((byte)e.Key, e.Type == EventType.KeyPressed, 0);
+                InputSystem.PushKeyEvent((byte)e.Key, e.Type == global::SkyHook.EventType.KeyPressed, 0);
             }
         }
 
@@ -200,7 +200,7 @@ namespace BaseMacro.Macro
 
                     int result = InputSystem.PushKeyEvent(
                         (byte)evt.Key,
-                        evt.Type == EventType.KeyPressed,
+                        evt.Type == global::SkyHook.EventType.KeyPressed,
                         0);
 
                     // ⑧ 统计用局部变量累加，退出循环后一次性写回
