@@ -21,10 +21,19 @@ namespace BaseMacro.Macro
         [StructLayout(LayoutKind.Explicit, Pack = 1)]
         public struct SkyHookEvent
         {
+            [FieldOffset(0)]
             public long TimeSec;
+
+            [FieldOffset(8)]
             public uint TimeSubsecNano;
+
+            [FieldOffset(12)]
             public global::SkyHook.EventType Type;
+
+            [FieldOffset(16)]
             public global::SkyHook.KeyLabel Label;
+
+            [FieldOffset(20)]
             public ushort Key;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
