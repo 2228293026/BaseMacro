@@ -1,5 +1,9 @@
 # BaseMacro
 
+![C#](https://img.shields.io/badge/Lang-C%23-c9c8e4.svg?logo=csharp)
+![Visual Studio](https://img.shields.io/badge/IDE-Visual%20Studio-c9c8e4.svg?logo=visualstudio)
+![Downloads](https://img.shields.io/github/downloads/2228293026/BaseMacro/total)
+
 [English README](README.en.md)
 
 `BaseMacro` 是一个用于 **A Dance of Fire and Ice (ADOFAI)** 的 UnityModManager（UMM）模组，核心目标是提供更稳定、可调、可过滤的自动输入能力，覆盖从“直接判定触发”到“系统级按键模拟”的多种使用场景。
@@ -105,7 +109,16 @@ BaseMacro 提供以下核心能力：
 - `UnityEngine.CoreModule.dll`
 - `SkyHook.Unity.dll`
 
-### 4.2 本地构建流程
+### 4.2 开发工具下载（编程语言 / 编译器）
+
+- 编程语言：C#（Microsoft Learn）
+  - https://learn.microsoft.com/dotnet/csharp/
+- .NET Framework 开发包下载（用于目标框架构建）
+  - https://dotnet.microsoft.com/download/dotnet-framework
+- 编译器 / IDE：Visual Studio（建议安装 **.NET 桌面开发** 工作负载）
+  - https://visualstudio.microsoft.com/zh-hans/downloads/
+
+### 4.3 本地构建流程
 
 1. 检查 `BaseMacro.csproj` 的 `HintPath`，指向你本机 ADOFAI 安装目录。
 2. 如需，先执行 NuGet 还原（`packages.config` 方式）。
