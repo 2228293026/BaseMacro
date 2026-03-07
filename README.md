@@ -1,5 +1,7 @@
 # BaseMacro
 
+[English README](README.en.md)
+
 `BaseMacro` 是一个用于 **A Dance of Fire and Ice (ADOFAI)** 的 UnityModManager 模组，提供宏触发、按键模拟、异步输入与输入过滤等功能。
 
 ## 功能概览
