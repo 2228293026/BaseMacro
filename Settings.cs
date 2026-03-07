@@ -194,7 +194,7 @@ namespace BaseMacro
 
         private (string input, bool focused) _deathKeyDelayState = (string.Empty, false);
 
-        private static readonly Dictionary<string, int> KeyCodeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        private static readonly Dictionary<string, int> KeyCodeMap = new(StringComparer.OrdinalIgnoreCase)
         {
             // 字母键
             {"A", 0x41}, {"B", 0x42}, {"C", 0x43}, {"D", 0x44}, {"E", 0x45}, {"F", 0x46},
@@ -276,6 +276,7 @@ namespace BaseMacro
 
         private (string input, bool focused) _filteredKeysState = (string.Empty, false);
         private (string input, bool focused) _filteredAsyncKeysState = (string.Empty, false);
+        public bool HighPrecisionTime;
 
         public void OnGUI(UnityModManager.ModEntry modEntry)
         {
@@ -362,7 +363,7 @@ namespace BaseMacro
 
             GUILayout.Label(LanguageSwitchText, UIUtils.LabelStyle, GUILayout.Width(150));
 
-            string[] languages = { "中文", "English" };
+            string[] languages = ["中文", "English"];
             int selected = UseChinese ? 0 : 1;
             int newSelected = UIUtils.M3SelectionGrid(selected, languages, 2, GUILayout.Width(200));
             if (newSelected != selected)
@@ -411,6 +412,9 @@ namespace BaseMacro
             GUILayout.Space(2);
             string arrowText = UseChinese ? "允许左右键调整延迟(游戏中)" : "Allow adjustment of delay using left and right keys (in-game)";
             EnableArrowTimeAdjust = UIUtils.M3Switch(EnableArrowTimeAdjust, arrowText);
+            GUILayout.Space(2);
+            string highPrecisionText = UseChinese ? "启用高精度时间（提高同步精度）" : "Enable High Precision Time (improves sync accuracy)";
+            HighPrecisionTime = UIUtils.M3Switch(HighPrecisionTime, highPrecisionText);
             GUILayout.Space(2);
             string highPrecisionAsyncText = UseChinese ? "[实验性]启用高精度异步" : "[Experimental]Enable High Precision Async";
             HighPrecisionAsync = UIUtils.M3Switch(HighPrecisionAsync, highPrecisionAsyncText);
@@ -798,7 +802,7 @@ namespace BaseMacro
 
                 // 常用按键快捷按钮
                 GUILayout.BeginHorizontal();
-                string[] commonKeys = { "R", "SPACE", "ENTER", "F2", "ESC" };
+                string[] commonKeys = ["R", "SPACE", "ENTER", "F2", "ESC"];
                 foreach (string key in commonKeys)
                 {
                     if (GUILayout.Button(key, UIUtils.ButtonStyle, GUILayout.ExpandWidth(true)))
