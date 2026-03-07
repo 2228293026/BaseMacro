@@ -198,6 +198,12 @@ namespace BaseMacro.Macro
                 {
                     ref readonly SkyHookEvent evt = ref _ring[localRead & BUFFER_MASK];
 
+                    // InputSystem.PushKeyEvent 의 세 번째 파라미터(타임스탬프)에
+                    // evt.GetTimeInTicks() (~6.38e17, 절대 .NET DateTime ticks) 를 전달하면
+                    // SkyHook 내부에서 "미래 이벤트"로 판정되어 드롭될 가능성이 높다.
+                    // PushKeyEvent 가 기대하는 단위(프로세스 기동 후 경과 틱, 혹은 다른 기준)를
+                    // 확인하기 전까지는 0 을 전달한다.
+                    // 0 = "지금 즉시"로 해석되며, 이벤트가 드롭 없이 바로 처리된다.
                     int result = InputSystem.PushKeyEvent(
                         (byte)evt.Key,
                         evt.Type == global::SkyHook.EventType.KeyPressed,

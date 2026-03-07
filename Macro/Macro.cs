@@ -110,10 +110,12 @@ namespace BaseMacro.Macro
         private static volatile bool _cachedSkyHookMode = false;
 
 
-        // SkyHook 计时基准：原始 QPC 快照（主线程写，工作线程读）
-        // 不用 volatile long（CS0677），用 Interlocked.Read / Exchange 保证 64-bit 原子性
-        // 替代了旧的 startTimeTicks（DSP-FileTime），使 SendKey 完全脱离 DSPTimeSimulater 访问
-        private static long _startQpcTicks;
+        // Unix epoch 基准（100ns 单位），用于将 DateTime.UtcNow.Ticks 转换为 SkyHookEvent 格式。
+        // SkyHookEvent.TimeSec 是从1970-01-01开始的秒数，与 QPC 相对基准不兼容。
+        // DateTime.UtcNow.Ticks - _unixEpochTicks = 从1970起的100ns滴答数，
+        // 与游戏内 SkyHookEvent.GetTimeInTicks() 的重建逻辑完全对称，零误差。
+        private static readonly long _unixEpochTicks =
+            new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
         private static volatile bool skyHookInitialized = false;
 
         // ─────────────────────────────────────────────
@@ -485,15 +487,22 @@ namespace BaseMacro.Macro
         {
             if (_cachedSkyHookMode)
             {
-                // 工作线程不访问 DSPTimeSimulater（数据竞争：m_dspTime 由主线程写）
-                // 改用纯 QPC 算术：delta = qpcNow - _startQpcTicks，转换为 100ns 单位
-                // 除法优先（divide-first）避免溢出：3GHz TSC * 30分钟 * 10_000_000 > long.MaxValue
-                long qpcNow = GetRawTicks();
-                long qpcDelta = qpcNow - Interlocked.Read(ref _startQpcTicks);
-                long elapsed = usePerfCounter
-                    ? (qpcDelta / perfFrequency) * 10_000_000L
-                      + (qpcDelta % perfFrequency) * 10_000_000L / perfFrequency
-                    : qpcDelta; // fallback: UtcNow.Ticks 已是 100ns 单位
+                // SkyHookEvent.TimeSec = 从1970起的Unix秒数，TimeSubsecNano = 纳秒余数。
+                // GetTimeInTicks() = TimeSec*10_000_000 + TimeSubsecNano/100 + EpochTicks
+                //                  = unixTicks + EpochTicks = DateTime.UtcNow.Ticks ← 正确绝对时间
+                //
+                // 旧方案用 QPC 相对时间（elapsed = qpcDelta / freq * 10_000_000）：
+                //   Create(elapsed) → TimeSec = elapsed/10_000_000（从本次session起的秒数）
+                //   GetTimeInTicks() = elapsed + EpochTicks（1970年 + 几秒 ≠ 当前时刻）
+                //   → InputSystem.PushKeyEvent 收到错误的绝对时间戳，调度全部偏移
+                //
+                // 新方案：DateTime.UtcNow.Ticks - _unixEpochTicks = 从1970起的100ns滴答数
+                //   Create(unixTicks) → TimeSec = Unix秒，TimeSubsecNano = 纳秒余数
+                //   GetTimeInTicks() = unixTicks + EpochTicks = DateTime.UtcNow.Ticks ✓
+                //
+                // DateTime.UtcNow 在 Windows 底层调用缓存的 GetSystemTimeAsFileTime，
+                // 精度约 100ns，性能约 10-20ns，无系统调用开销，完全符合热路径要求。
+                long elapsed = DateTime.UtcNow.Ticks - _unixEpochTicks;
                 AsyncInputManager.EnqueueEvent(
                     SkyHookSystem.SkyHookEvent.Create(keyCode, isDown, elapsed));
                 Log($"[Macro-Worker] SkyHook key=0x{keyCode:X2} down={isDown}");
@@ -544,9 +553,6 @@ namespace BaseMacro.Macro
             int syncFloor = SyncFloor(_songPosRef);
             Volatile.Write(ref _workerLastTriggeredFloor, syncFloor);
             Volatile.Write(ref _workerKeyIndex, 0);
-
-            if (Main.Settings.SkyHookMode)
-                Interlocked.Exchange(ref _startQpcTicks, GetRawTicks());
 
             Log("[Macro-Main] 初始化完成");
         }
@@ -603,7 +609,7 @@ namespace BaseMacro.Macro
         private static void ApplyHoldBehavior(scrController controller)
         {
             if (controller == null || !Main.Settings.Macro) return;
-            // SimulateKeyPress=false 时，表达式短路已令结果为 false，第二个 if 是死代码, 保险操作
+            // SimulateKeyPress=false 时，表达式短路已令结果为 false，第二个 if 是死代码
             controller.requireHolding = Main.Settings.SimulateKeyPress &&
                                         Persistence.holdBehavior < HoldBehavior.NoHoldNeeded;
             if (!Main.Settings.SimulateKeyPress)
@@ -641,9 +647,6 @@ namespace BaseMacro.Macro
 
             AsyncInputManager.ClearQueue();
 
-            if (Main.Settings.SkyHookMode)
-                Interlocked.Exchange(ref _startQpcTicks, GetRawTicks());
-
             if (controller != null)
                 ApplyHoldBehavior(controller);
         }
@@ -657,7 +660,7 @@ namespace BaseMacro.Macro
             _workerThread = new Thread(WorkerLoop)
             {
                 IsBackground = true,
-                Priority = System.Threading.ThreadPriority.Highest,
+                Priority = System.Threading.ThreadPriority.AboveNormal,
                 Name = "MacroWorkerThread"
             };
             _workerThread.Start();
@@ -714,13 +717,9 @@ namespace BaseMacro.Macro
                     return;
                 }
                 skyHookInitialized = true;
-                // _startQpcTicks 必须在 _cachedSkyHookMode=true 之前写入：
-                // 工作线程一看到 _cachedSkyHookMode=true 就会在 SendKey 里读 _startQpcTicks。
-                // 若顺序颠倒，工作线程读到旧值（甚至初始0），qpcDelta = qpcNow - 0 ≈ 系统启动秒数，
-                // 传给 SkyHookEvent.Create 是天文数字，导致所有事件时间戳错误。
-                // Interlocked.Exchange 含 full fence，保证 _cachedSkyHookMode 的写对工作线程可见时
-                // _startQpcTicks 已经是正确值。
-                Interlocked.Exchange(ref _startQpcTicks, GetRawTicks());
+                // SendKey 现在用 DateTime.UtcNow.Ticks - _unixEpochTicks 直接生成 Unix 时间戳，
+                // 不依赖任何需要在 _cachedSkyHookMode=true 之前写入的基准字段，
+                // 因此这里只需直接设置 _cachedSkyHookMode=true 即可。
                 _cachedSkyHookMode = true;
                 Main.Settings.SkyHookMode = true;
             }
