@@ -36,7 +36,10 @@ namespace BaseMacro.Macro
         private static volatile bool _isRunning = false;
         private static Thread? _workerThread;
 
-        // 统计（工作线程独占写，无需 Interlocked）
+        // 统计
+        // Bug1 修复：_totalDropped 由两个线程写（生产者: EnqueueEvent/EnqueueEvents；
+        // 消费者: ConsumeLoop），改用 Interlocked 操作保证 32-bit Mono 下原子性。
+        // _totalProcessed 仅由消费者写，无竞争，保持普通 long。
         private static long _totalProcessed = 0;
         private static long _totalDropped = 0;
 
@@ -119,7 +122,7 @@ namespace BaseMacro.Macro
             timeEndPeriod(1);
 
             _isInitialized = false;
-            Macro.Log($"[InputSystem] 已停止 | 处理: {_totalProcessed} | 丢弃: {_totalDropped}");
+            Macro.Log($"[InputSystem] 已停止 | 处理: {_totalProcessed} | 丢弃: {Interlocked.Read(ref _totalDropped)}");
         }
 
         // ══════════════════════════════════════════════════════
@@ -203,7 +206,7 @@ namespace BaseMacro.Macro
                     // ⑧ 统计用局部变量累加，退出循环后一次性写回
                     //    避免每次 Interlocked 操作
                     if (result == 0) _totalProcessed++;
-                    else if (result == -2) _totalDropped++;
+                    else if (result == -2) Interlocked.Increment(ref _totalDropped); // Bug1: 跨线程写
 
                     localRead++;
 
@@ -213,8 +216,32 @@ namespace BaseMacro.Macro
                         localWrite = _writeIndex;
                 }
 
-                // ⑦ 一次性提交读指针（整批只有这一次 Interlocked）
-                Interlocked.Exchange(ref _readIndex, localRead);
+                // ⑦ 批量提交读指针：使用"只进不退"的 CAS 循环
+                //
+                // Bug2 修复：原 Interlocked.Exchange(ref _readIndex, localRead) 会无条件覆写 _readIndex。
+                // ClearQueue() 由主线程调用，会将 _readIndex 推进到 _writeIndex（跳过所有待处理事件）。
+                // 若 ClearQueue 在本批次处理期间执行：
+                //   - ClearQueue 将 _readIndex 从 10 推进到 500
+                //   - 本批次 localRead 处理完后为 200（批次开始前快照的 localWrite）
+                //   - Exchange 将 _readIndex 从 500 退回到 200
+                //   - 消费者重新"看到"200~499 这 300 个已被清除的旧事件，重复触发
+                //
+                // 修复：用 CAS 循环保证 _readIndex 只能向前移动，永不后退。
+                // 若 CAS 失败说明 ClearQueue 已推进到更高值，直接接受该值作为新 localRead。
+                {
+                    int current;
+                    do
+                    {
+                        current = _readIndex;
+                        if (current >= localRead)
+                        {
+                            // ClearQueue 已经把指针推过了我们的 localRead（或相等）
+                            // 接受更高的值，跳过中间的已清除事件
+                            localRead = current;
+                            break;
+                        }
+                    } while (Interlocked.CompareExchange(ref _readIndex, localRead, current) != current);
+                }
             }
         }
 
@@ -232,7 +259,7 @@ namespace BaseMacro.Macro
 
             if ((write - read) >= BUFFER_SIZE)
             {
-                _totalDropped++;
+                Interlocked.Increment(ref _totalDropped); // Bug1 修复：Interlocked
                 return;
             }
 
@@ -253,7 +280,9 @@ namespace BaseMacro.Macro
             int space = BUFFER_SIZE - (write - read);
             int count = Math.Min(events.Length, space);
 
-            _totalDropped += events.Length - count;
+            int dropped = events.Length - count;
+            if (dropped > 0)
+                Interlocked.Add(ref _totalDropped, dropped); // Bug1 修复：Interlocked
 
             for (int i = 0; i < count; i++)
                 _ring[(write + i) & BUFFER_MASK] = events[i];
@@ -264,12 +293,14 @@ namespace BaseMacro.Macro
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void ClearQueue()
         {
+            // 将 _readIndex 推进到当前 _writeIndex：跳过所有已入队事件
+            // ConsumeLoop 用"只进不退"CAS 保证不会退回到更低值（见 Bug2 修复注释）
             Interlocked.Exchange(ref _readIndex, _writeIndex);
             Macro.Log("[InputSystem] 队列已清空");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static (int queueSize, long processed, long dropped) GetStats() =>
-            (_writeIndex - _readIndex, _totalProcessed, _totalDropped);
+            (_writeIndex - _readIndex, _totalProcessed, Interlocked.Read(ref _totalDropped));
     }
 }

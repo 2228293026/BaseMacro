@@ -75,6 +75,22 @@ namespace BaseMacro
             }
         }
 
+        [HarmonyPatch(typeof(scnEditor), nameof(scnEditor.Play))]
+        public static class Patch_scnEditor_Play
+        {
+            [HarmonyPostfix]
+            public static void Postfix(scnEditor __instance)
+            {
+                if (Main.Settings.Macro)
+                {
+                    if (Main.Settings.ChangeJudementInPlay)
+                        __instance.editorDifficultySelector.SetChangeable(true);
+                    if (Main.Settings.ChangeNoFaillInPlay)
+                        __instance.buttonNoFail.interactable = true;
+                }
+            }
+        }
+
         [HarmonyPatch(typeof(scrConductor), "Update")]
         public static class __scrConductor
         {

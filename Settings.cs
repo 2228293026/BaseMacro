@@ -188,6 +188,9 @@ namespace BaseMacro
             }
         }
 
+        public bool ChangeNoFaillInPlay = false;
+        public bool ChangeJudementInPlay = false;
+
         private (string input, bool focused) _deathKeyDelayState = (string.Empty, false);
 
         private static readonly Dictionary<string, int> KeyCodeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
@@ -714,7 +717,7 @@ namespace BaseMacro
             GUILayout.Space(2);
 
             // 先检查 SkyHookMode 是否开启
-            if (!SkyHookMode)
+            if (!SkyHookMode && EnableDeathKey)
             {
                 // 如果 SkyHook 未开启，显示提示信息
                 GUIStyle warningStyle = new(UIUtils.LabelStyle);
@@ -819,6 +822,9 @@ namespace BaseMacro
 
                 GUILayout.Space(4);
             }
+
+            ChangeNoFaillInPlay =  UIUtils.M3Switch(ChangeNoFaillInPlay, UseChinese ? "游戏中允许切换失败模式" : "The game allows switching to failure mode");
+            ChangeJudementInPlay =  UIUtils.M3Switch(ChangeJudementInPlay, UseChinese ? "游戏中允许切换判定" : "Switching Judement is allowed in the game");
 
             GUILayout.EndVertical();
         }
