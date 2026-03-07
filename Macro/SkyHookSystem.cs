@@ -18,7 +18,7 @@ namespace BaseMacro.Macro
         /// <summary>
         /// SkyHook 事件结构（与游戏内结构对齐）。
         /// </summary>
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        [StructLayout(LayoutKind.Explicit, Pack = 1)]
         public struct SkyHookEvent
         {
             public long TimeSec;
