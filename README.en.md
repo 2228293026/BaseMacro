@@ -1,5 +1,12 @@
 # BaseMacro
 
+[![C#](https://img.shields.io/badge/Lang-C%23-c9c8e4.svg?logo=csharp)](https://dotnet.microsoft.com/zh-cn/languages/csharp)
+[![.NET Framework 4.8.1](https://img.shields.io/badge/.NET%20Framework-4.8.1-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net481)
+[![Visual Studio](https://img.shields.io/badge/IDE-Visual%20Studio-c9c8e4.svg?logo=visualstudio)](https://visualstudio.microsoft.com/zh-hans/)
+[![License](https://img.shields.io/github/license/2228293026/BaseMacro?color=blue)](https://github.com/2228293026/BaseMacro/blob/master/LICENSE.txt)
+[![Third-Party License](https://img.shields.io/badge/Third--Party-AsyncInputOptimize-lightgrey)](https://github.com/2228293026/BaseMacro/blob/master/AsyncInputOptimize-LICENSE.txt)
+[![Downloads](https://img.shields.io/github/downloads/2228293026/BaseMacro/total)](https://github.com/2228293026/BaseMacro/releases)
+
 [中文说明](README.md)
 
 `BaseMacro` is a UnityModManager (UMM) mod for **A Dance of Fire and Ice (ADOFAI)**. It is designed to provide stable, tunable, and filterable automated input workflows, from direct in-game hit triggering to system-level key simulation.
