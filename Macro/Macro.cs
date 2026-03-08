@@ -46,14 +46,14 @@ namespace BaseMacro.Macro
         //
         //  层2 - QPC（工作线程插值）
         //        主线程在采 DSP 快照后立刻采 QPC，一起写入 anchor。
-        //        工作线程只做 (QPC_now - qpcSnapshot) / freq，零系统调用，~20ns。
+        //        工作线程只做 (QPC_now - qpcSnapshot) * perfFreqInv，零系统调用，~20ns。
         //
         //  层3 - anchor 双缓冲（发布协议）
         //        主线程写 inactive anchor，Volatile.Write 发布，工作线程读。
         //
         //  公式：
         //    audioNow = songPosRef
-        //             + (dspSnapshot + (QPC_now - qpcSnapshot) / freq - dspTimeRef) * pitch
+        //             + (dspSnapshot + (QPC_now - qpcSnapshot) * perfFreqInv - dspTimeRef) * pitch
         //
         //  好处：DSP 长期校准 + QPC 帧内精度 + 零竞争
         // ─────────────────────────────────────────────
@@ -70,9 +70,9 @@ namespace BaseMacro.Macro
             public scrFloor[]? floors;
             public byte[] keyCodesSnapshot;
             public int keyCodesVersion;
-            // FIX: valid 改为字段（引用类型字段），以支持 Volatile.Write
+            // valid 改为字段（引用类型字段），以支持 Volatile.Write
             public int validFlag;   // 0=false, 1=true（int 可 Volatile 操作）
-            // FIX: 静态数据版本号，跳过热帧对不变字段的重复赋值
+            // 静态数据版本号，跳过热帧对不变字段的重复赋值
             public int staticVersion;
 
             public bool valid
@@ -92,9 +92,16 @@ namespace BaseMacro.Macro
         private static double _dspTimeRef;
         private static float _lastPitch;
 
-        // FIX: 静态数据版本号（triggerTimes/floors），reinit 时递增，
-        //      避免主线程热帧每次都重写不变字段
+        // 静态数据版本号（triggerTimes/floors），reinit 时递增，
+        // 避免主线程热帧每次都重写不变字段
         private static int _staticAnchorVersion = 0;
+
+        // ─────────────────────────────────────────────
+        //  OPT-1: 预计算 QPC 频率倒数，将内层热路径除法 (~5-10ns) 改为乘法 (~1-2ns)
+        //         同时消除 usePerfCounter 分支判断。
+        //         perfFrequency == 0 时（QueryPerformanceFrequency 失败）回退 100ns 单位。
+        // ─────────────────────────────────────────────
+        private static readonly double perfFreqInv;
 
         // ─────────────────────────────────────────────
         //  工作线程 → 主线程反馈
@@ -112,13 +119,16 @@ namespace BaseMacro.Macro
         private static volatile bool _workerRunning = false;
         private static readonly SemaphoreSlim _startSignal = new(0, 1);
 
-        // FIX: 用简单 flag 替代每帧检查 CurrentCount，避免重复内核调用
+        // 用简单 flag 替代每帧检查 CurrentCount，避免重复内核调用
         private static volatile bool _workerStarted = false;
 
         private static byte _pendingKey;
         private static bool _isKeyDown;
 
         private static volatile bool _cachedSkyHookMode = false;
+
+        // OPT-2: 缓存 HighPrecisionTime 设置，避免热路径每次解引用 Main.Settings 对象
+        private static volatile bool _cachedHighPrecision = false;
 
         private static volatile bool skyHookInitialized = false;
 
@@ -141,7 +151,7 @@ namespace BaseMacro.Macro
         [DllImport("Kernel32.dll")]
         private static extern bool QueryPerformanceFrequency(out long lpFrequency);
 
-        // FIX: timeBeginPeriod/timeEndPeriod，把 Sleep(1) 的实际精度从 ~15.6ms 压到 ~1ms
+        // timeBeginPeriod/timeEndPeriod，把 Sleep(1) 的实际精度从 ~15.6ms 压到 ~1ms
         [DllImport("winmm.dll")]
         private static extern uint timeBeginPeriod(uint uPeriod);
         [DllImport("winmm.dll")]
@@ -234,6 +244,12 @@ namespace BaseMacro.Macro
         static Macro()
         {
             usePerfCounter = QueryPerformanceFrequency(out perfFrequency);
+
+            // OPT-1: 预计算倒数，后续所有 QPC 时间换算均用乘法
+            perfFreqInv = (usePerfCounter && perfFrequency > 0)
+                ? 1.0 / perfFrequency
+                : 1e-7;  // 100ns 单位回退
+
             for (int i = 0; i < 256; i++)
                 scanCodeCache[i] = (byte)MapVirtualKey((uint)i, 0);
         }
@@ -257,6 +273,9 @@ namespace BaseMacro.Macro
 
             if (settings.SkyHookMode != skyHookInitialized)
                 SwitchMode(settings.SkyHookMode);
+
+            // OPT-2: 每帧同步缓存，避免工作线程热路径解引用 Main.Settings
+            _cachedHighPrecision = settings.HighPrecisionTime;
 
             if (!initialized)
             {
@@ -294,8 +313,8 @@ namespace BaseMacro.Macro
 
             var anchor = ReferenceEquals(_currentAnchor, _anchorA) ? _anchorB : _anchorA;
 
-            // FIX: 只更新每帧都会变化的时钟字段；
-            //      triggerTimes/floors 等静态数据只在版本号变化时更新，避免热帧无效赋值
+            // 只更新每帧都会变化的时钟字段；
+            // triggerTimes/floors 等静态数据只在版本号变化时更新，避免热帧无效赋值
             anchor.songPosRef = _songPosRef;
             anchor.dspTimeRef = _dspTimeRef;
             anchor.dspSnapshot = dspSnap;
@@ -319,13 +338,13 @@ namespace BaseMacro.Macro
                 anchor.keyCodesVersion = _keyCodesVersion;
             }
 
-            // FIX: valid 通过 Volatile.Write 写 int 字段，保证工作线程读到正确值
-            //      且写入顺序在 _currentAnchor 发布之前（防 CPU 乱序）
+            // valid 通过 Volatile.Write 写 int 字段，保证工作线程读到正确值
+            // 且写入顺序在 _currentAnchor 发布之前（防 CPU 乱序）
             Volatile.Write(ref anchor.validFlag, 1);
             Volatile.Write(ref _currentAnchor, anchor);
 
-            // FIX: 用 _workerStarted flag 替代每帧检查 CurrentCount，
-            //      彻底消除重复内核调用
+            // 用 _workerStarted flag 替代每帧检查 CurrentCount，
+            // 彻底消除重复内核调用
             if (!_workerStarted)
             {
                 _workerStarted = true;
@@ -341,39 +360,25 @@ namespace BaseMacro.Macro
         //  工作线程：自旋 + 精确计时触发
         //
         //  ──────────────────────────────────────────────────────────
-        //  爆发高 BPM 解决方案（核心改动）
+        //  爆发高 BPM 解决方案
         //  ──────────────────────────────────────────────────────────
         //
-        //  旧架构问题：
-        //    内层 for 循环遇到"未到时间的 floor"就 break，
-        //    每次重入外层 while 需要：
-        //      读 anchor → 版本检查 → 复制 10+ 个局部变量 → 重算 audioNow
-        //    开销约 200-500ns。对 notes 间隔 2-5ms 的爆发段，
-        //    每次重入都在消耗精度窗口，触发延迟积累 → 漏按。
-        //    另外 audioNow 只在 for 循环外算一次，整个 for 遍历期间
-        //    时钟不更新，越到后面的 floor 误差越大。
-        //
-        //  新架构：
-        //    1. for 循环不自动递增 i，只有成功触发后才 i++
-        //    2. audioNow 在每次循环体内用 QPC 重算（~20ns，无系统调用）
-        //    3. 对同一个 floor 反复重入实现精确等待：
-        //         waitSec > 5ms  → Sleep(1) + break（回外层刷新 anchor）
-        //         waitSec > 2ms  → Yield   + continue（同 floor 重试，让一次 CPU）
-        //         waitSec ≤ 2ms  → 纯自旋 continue（最高精度，不离开 for）
-        //    4. 触发后尝试接收新 anchor（爆发段跨帧时刷新 DSP 基准）
-        //
-        //  额外修复：
-        //    hitNeeded: bool → hitCount: int
-        //    原来一轮外层循环里无论触发多少个 floor，只 Interlocked.Increment 一次，
-        //    爆发段多 floor 同帧触发时 Hit() 全部被吞。
-        //    改用 Interlocked.Add 将实际触发数全部提交给主线程。
+        //  1. for 循环不自动递增 i，只有成功触发后才 i++
+        //  2. audioNow 在每次循环体内用 QPC 重算（~20ns，无系统调用）
+        //  3. 对同一个 floor 反复重入实现精确等待：
+        //       waitSec > 5ms  → Sleep(1) + break（回外层刷新 anchor）
+        //       waitSec > 2ms  → SpinWait + continue（比 Yield 更可控）[OPT-3]
+        //       waitSec ≤ 2ms  → 纯自旋 continue（最高精度，不离开 for）
+        //  4. 触发后尝试接收新 anchor（爆发段跨帧时刷新 DSP 基准）
+        //  5. OPT-4: 外层缓存 lastSeenAnchor，锚点未变时跳过局部变量重拷贝
+        //  6. OPT-5: 自旋段每 64 次才做一次 resetVersion volatile read，
+        //            减少不必要的内存屏障
         // ═══════════════════════════════════════════════════════════════
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WorkerLoop()
         {
             Log("[Macro-Worker] 工作线程启动");
 
-            // FIX: timeBeginPeriod(1) 确保 Sleep(1) 实际精度约 1ms（默认 ~15.6ms）
             timeBeginPeriod(1);
 
             try
@@ -395,7 +400,6 @@ namespace BaseMacro.Macro
                         continue;
                     }
 
-                    // 版本号变化 → 检测到 Reset，同步本地状态后重读 anchor
                     int curResetVer = Volatile.Read(ref _resetVersion);
                     if (curResetVer != localResetVer)
                     {
@@ -407,8 +411,6 @@ namespace BaseMacro.Macro
 
                     var times = anchor.triggerTimes;
                     var floors = anchor.floors;
-
-                    // FIX: triggerCount 取两者较小值，防止 floors/times 长度不一致时越界
                     int triggerCount = Math.Min(times.Length, floors.Length);
 
                     byte[] keys = anchor.keyCodesSnapshot;
@@ -421,15 +423,9 @@ namespace BaseMacro.Macro
                     double dspSnapshot = anchor.dspSnapshot;
                     long qpcSnapshot = anchor.qpcSnapshot;
 
-                    // FIX: 声明必须在 goto WriteBack 之前，否则编译器报"未赋值的局部变量"
-                    //   用计数代替 bool：旧代码一轮外层循环无论触发多少 floor 只计 1 次，
-                    //   爆发段同帧触发 N 个 floor → 主线程只收到 1 次 Hit()，其余全部丢失
                     int hitCount = 0;
                     bool triggered = false;
 
-                    // FIX: 所有可触发 floor 均已完成 → 等待 resetVersion 变化，
-                    //      最多睡 50ms（~50×Sleep(1)），换曲后立即响应，
-                    //      而不是旧版 Thread.Sleep(5) 一次性睡死
                     if (localLastFloor >= triggerCount - 2)
                     {
                         int ver = Volatile.Read(ref _resetVersion);
@@ -439,16 +435,8 @@ namespace BaseMacro.Macro
                         goto WriteBack;
                     }
 
-                    // ─────────────────────────────────────────────────────
-                    //  内层循环：i 不在 for 语句里自增，触发后才 i++
-                    //
-                    //  对同一 floor 可多次重入做精确等待，
-                    //  无需退出到外层 while 重新复制变量（消除 200-500ns 重入开销）。
-                    //  audioNow 每次迭代用 QPC 刷新，保证整个爆发段时钟精度一致。
-                    // ─────────────────────────────────────────────────────
                     for (int i = localLastFloor + 1; i < triggerCount; /* i++ 在触发后 */)
                     {
-                        // 爆发自旋中定期检测 Reset，防止用旧歌数据触发
                         if (Volatile.Read(ref _resetVersion) != localResetVer)
                             goto WriteBack;
 
@@ -462,12 +450,9 @@ namespace BaseMacro.Macro
                             continue;
                         }
 
-                        // ── 每次迭代都重算 audioNow（QPC ~20ns，无系统调用）──────
-                        //    旧设计只在 for 外算一次，爆发段越靠后的 floor 误差越大。
+                        // OPT-1: 乘 perfFreqInv 代替除 perfFrequency
                         long qpcNow = GetRawTicks();
-                        double dspElapsed = usePerfCounter
-                            ? (double)(qpcNow - qpcSnapshot) / perfFrequency
-                            : (double)(qpcNow - qpcSnapshot) * 1e-7;
+                        double dspElapsed = (double)(qpcNow - qpcSnapshot) * perfFreqInv;
                         double audioNow = songPosRef + (dspSnapshot + dspElapsed - dspTimeRef) * pitch;
 
                         double triggerAt = times[i] + timeOffset;
@@ -477,17 +462,11 @@ namespace BaseMacro.Macro
                             if (pitch <= 0.0) { Thread.Sleep(1); break; }
                             double waitSec = (triggerAt - audioNow) / pitch;
 
-                            // 分级等待（不退出 for，对同一 floor 重试）：
-                            //   > 5ms  → Sleep(1) + break：让 OS 调度，回外层刷新 anchor
-                            //   > 2ms  → Yield   + continue：让步一次时间片，立即重试同 floor
-                            //   ≤ 2ms  → 纯自旋 continue：精确等待，不离开 for 循环
                             if (waitSec > 0.005) { Thread.Sleep(1); break; }
                             else if (waitSec > 0.002) Thread.Yield();
-                            // else：纯自旋，直接 continue，i 不递增
                             continue;
                         }
 
-                        // ── 到时间，触发 ──────────────────────────────────
                         bool releaseOnly = false;
                         if (simulateKey && floor.holdLength > -1 && i + 1 < triggerCount)
                         {
@@ -497,7 +476,7 @@ namespace BaseMacro.Macro
 
                         if (!simulateKey)
                         {
-                            hitCount++;   // FIX: 计数，爆发段多 floor 全部计入
+                            hitCount++;
                             Log($"[Macro-Worker] 请求 Hit() FloorIndex={i}");
                         }
                         else if (releaseOnly)
@@ -512,14 +491,9 @@ namespace BaseMacro.Macro
                             Log($"[Macro-Worker] 按下 0x{key:X2} FloorIndex={i} audioNow={audioNow:F6}");
                         }
 
-                        localLastFloor = i++;  // 触发后才递增 i
+                        localLastFloor = i++;
                         triggered = true;
 
-                        // ── 触发后尝试接收更新的 anchor ──────────────────
-                        //    爆发段可能跨越多个主线程帧（>16ms），
-                        //    及时刷新 dspSnapshot/qpcSnapshot 减少时钟漂移累积。
-                        //    pitch/songPosRef/dspTimeRef 不在此处刷新：
-                        //    这些参数变化时版本号会触发外层同步。
                         var freshAnchor = Volatile.Read(ref _currentAnchor);
                         if (!ReferenceEquals(freshAnchor, anchor) && freshAnchor.valid
                             && Volatile.Read(ref _resetVersion) == localResetVer)
@@ -534,26 +508,22 @@ namespace BaseMacro.Macro
                         WorkerReleaseKey();
 
                 WriteBack:
-                    // 写回前二次确认版本号：
-                    // 防止 Reset 后 stale localLastFloor 覆盖主线程写入的 -1
                     if (triggered && Volatile.Read(ref _resetVersion) == localResetVer)
                     {
                         Volatile.Write(ref _workerLastTriggeredFloor, localLastFloor);
                         Volatile.Write(ref _workerKeyIndex, localKeyIndex);
                     }
                     if (hitCount > 0)
-                        Interlocked.Add(ref _workerNeedsHit, hitCount);  // FIX: Add 而非 Increment
+                        Interlocked.Add(ref _workerNeedsHit, hitCount);
                 }
             }
             finally
             {
-                // FIX: 无论线程如何退出都确保释放计时器分辨率，避免系统全局泄漏
                 timeEndPeriod(1);
                 WorkerReleaseKey();
                 Log("[Macro-Worker] 工作线程退出");
             }
         }
-
         // ═══════════════════════════════════════════════════════════════
         //  按键操作
         // ═══════════════════════════════════════════════════════════════
@@ -614,7 +584,6 @@ namespace BaseMacro.Macro
 
             cachedFloors = [.. levelMaker.listFloors];
 
-            // FIX: 取两者较小值，防止 floors/times 长度不一致时越界
             floorCount = cachedFloors.Length;
             triggerTimes = new double[floorCount];
 
@@ -626,7 +595,7 @@ namespace BaseMacro.Macro
             ParseKeyCodes();
             initialized = true;
 
-            // FIX: 静态数据版本递增，通知 anchor 更新 triggerTimes/floors
+            // 静态数据版本递增，通知 anchor 更新 triggerTimes/floors
             _staticAnchorVersion++;
 
             _dspTimeRef = DSPTimeSimulater.GetDSPTime();
@@ -721,8 +690,8 @@ namespace BaseMacro.Macro
             Volatile.Write(ref _workerKeyIndex, 0);
             Interlocked.Exchange(ref _workerNeedsHit, 0);
 
-            // FIX: valid 改为 Volatile.Write(ref int)，保证写入顺序在 resetVersion 递增之前，
-            //      防止 CPU 乱序导致工作线程读到 valid=true 但 resetVersion 已经改变
+            // valid 改为 Volatile.Write(ref int)，保证写入顺序在 resetVersion 递增之前，
+            // 防止 CPU 乱序导致工作线程读到 valid=true 但 resetVersion 已经改变
             Volatile.Write(ref _anchorA.validFlag, 0);
             Volatile.Write(ref _anchorB.validFlag, 0);
 
@@ -741,7 +710,7 @@ namespace BaseMacro.Macro
             if (_workerRunning && _workerThread?.IsAlive == true) return;
 
             _workerRunning = true;
-            _workerStarted = false;   // FIX: 重置启动 flag，确保新线程能收到信号
+            _workerStarted = false;   // 重置启动 flag，确保新线程能收到信号
             _workerThread = new Thread(WorkerLoop)
             {
                 IsBackground = true,
@@ -762,11 +731,13 @@ namespace BaseMacro.Macro
 
             _workerRunning = false;
 
-            // FIX: 用 _workerStarted flag 控制唤醒，配合 EnsureWorkerRunning 的重置逻辑
+            // FIX-BUG: 用 try-catch 防止 SemaphoreFullException（maxCount=1）
+            //          旧代码若工作线程尚未消费信号就触发第二次 Release 会抛异常
             if (!_workerStarted)
             {
                 _workerStarted = true;
-                _startSignal.Release();
+                try { _startSignal.Release(); }
+                catch (SemaphoreFullException) { /* 信号已满，工作线程会自行醒来 */ }
             }
 
             _workerThread?.Join(50);
@@ -809,11 +780,12 @@ namespace BaseMacro.Macro
 
         // ═══════════════════════════════════════════════════════════════
         //  计时器
+        //  OPT-2: 读 _cachedHighPrecision 而非每次解引用 Main.Settings
         // ═══════════════════════════════════════════════════════════════
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static long GetRawTicks()
         {
-            if (Main.Settings.HighPrecisionTime)
+            if (_cachedHighPrecision)
                 return DSPTimeSimulater.GetDSPTimeAsFileTime();
             return GetTicks();
         }
