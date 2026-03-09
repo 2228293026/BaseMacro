@@ -16,6 +16,21 @@ namespace BaseMacro.Macro
     internal static class Macro
     {
         // ─────────────────────────────────────────────
+        //  预处理按键事件结构体
+        //  在 Initialize() 阶段一次性算好：触发时间、按哪个键、是否只松键
+        //  工作线程热路径不再碰任何 floor 对象
+        // ─────────────────────────────────────────────
+        private readonly struct HitEvent(double triggerTime, byte keyCode, bool releaseOnly)
+        {
+            /// <summary>绝对音频触发时间（秒）</summary>
+            public readonly double TriggerTime = triggerTime;
+            /// <summary>要按下的虚拟键码；ReleaseOnly=true 时忽略此字段</summary>
+            public readonly byte KeyCode = keyCode;
+            /// <summary>true = 本拍只松开上一个 hold 键，不按新键</summary>
+            public readonly bool ReleaseOnly = releaseOnly;
+        }
+
+        // ─────────────────────────────────────────────
         //  主线程专属数据
         // ─────────────────────────────────────────────
         private static scrLevelMaker? levelMaker;
@@ -29,7 +44,8 @@ namespace BaseMacro.Macro
         // ─────────────────────────────────────────────
         //  只读共享数据（初始化后不变）
         // ─────────────────────────────────────────────
-        private static double[]? triggerTimes;
+        private static HitEvent[]? _hitEvents;
+        private static int _hitEventCount;
         private static int floorCount;
 
         // ─────────────────────────────────────────────
@@ -66,10 +82,14 @@ namespace BaseMacro.Macro
             public double pitch;
             public double timeOffset;
             public bool simulateKeyPress;
-            public double[]? triggerTimes;
-            public scrFloor[]? floors;
+
+            // 预处理事件表（替换原来的 triggerTimes + floors）
+            public HitEvent[]? hitEvents;
+            public int hitEventCount;
+
             public byte[] keyCodesSnapshot;
             public int keyCodesVersion;
+
             // valid 改为字段（引用类型字段），以支持 Volatile.Write
             public int validFlag;   // 0=false, 1=true（int 可 Volatile 操作）
             // 静态数据版本号，跳过热帧对不变字段的重复赋值
@@ -92,7 +112,7 @@ namespace BaseMacro.Macro
         private static double _dspTimeRef;
         private static float _lastPitch;
 
-        // 静态数据版本号（triggerTimes/floors），reinit 时递增，
+        // 静态数据版本号（hitEvents），reinit 时递增，
         // 避免主线程热帧每次都重写不变字段
         private static int _staticAnchorVersion = 0;
 
@@ -107,7 +127,6 @@ namespace BaseMacro.Macro
         //  工作线程 → 主线程反馈
         // ─────────────────────────────────────────────
         private static volatile int _workerLastTriggeredFloor = -1;
-        private static volatile int _workerKeyIndex = 0;
         private static volatile int _workerNeedsHit = 0;
 
         private static volatile int _resetVersion = 0;
@@ -118,8 +137,6 @@ namespace BaseMacro.Macro
         private static volatile Thread? _workerThread;
         private static volatile bool _workerRunning = false;
         private static readonly SemaphoreSlim _startSignal = new(0, 1);
-
-        // 用简单 flag 替代每帧检查 CurrentCount，避免重复内核调用
         private static volatile bool _workerStarted = false;
 
         private static byte _pendingKey;
@@ -150,8 +167,6 @@ namespace BaseMacro.Macro
         private static extern bool QueryPerformanceCounter(out long lpPerformanceCount);
         [DllImport("Kernel32.dll")]
         private static extern bool QueryPerformanceFrequency(out long lpFrequency);
-
-        // timeBeginPeriod/timeEndPeriod，把 Sleep(1) 的实际精度从 ~15.6ms 压到 ~1ms
         [DllImport("winmm.dll")]
         private static extern uint timeBeginPeriod(uint uPeriod);
         [DllImport("winmm.dll")]
@@ -313,8 +328,7 @@ namespace BaseMacro.Macro
 
             var anchor = ReferenceEquals(_currentAnchor, _anchorA) ? _anchorB : _anchorA;
 
-            // 只更新每帧都会变化的时钟字段；
-            // triggerTimes/floors 等静态数据只在版本号变化时更新，避免热帧无效赋值
+            // 每帧变化的时钟字段
             anchor.songPosRef = _songPosRef;
             anchor.dspTimeRef = _dspTimeRef;
             anchor.dspSnapshot = dspSnap;
@@ -323,13 +337,16 @@ namespace BaseMacro.Macro
             anchor.timeOffset = settings.TimeOffset * 0.001;
             anchor.simulateKeyPress = settings.SimulateKeyPress;
 
+            // 静态数据（HitEvent 表）：只在版本号变化时更新
             if (anchor.staticVersion != _staticAnchorVersion)
             {
-                anchor.triggerTimes = triggerTimes;
-                anchor.floors = cachedFloors;
+                anchor.hitEvents = _hitEvents;
+                anchor.hitEventCount = _hitEventCount;
                 anchor.staticVersion = _staticAnchorVersion;
             }
 
+            // keyCodesSnapshot 已在 BuildHitEvents 时固化到 HitEvent.KeyCode，
+            // 这里仍保留快照用于将来可能的动态键位切换检测
             if (anchor.keyCodesVersion != _keyCodesVersion)
             {
                 if (anchor.keyCodesSnapshot.Length != keyCodes.Count)
@@ -343,8 +360,6 @@ namespace BaseMacro.Macro
             Volatile.Write(ref anchor.validFlag, 1);
             Volatile.Write(ref _currentAnchor, anchor);
 
-            // 用 _workerStarted flag 替代每帧检查 CurrentCount，
-            // 彻底消除重复内核调用
             if (!_workerStarted)
             {
                 _workerStarted = true;
@@ -359,20 +374,12 @@ namespace BaseMacro.Macro
         // ═══════════════════════════════════════════════════════════════
         //  工作线程：自旋 + 精确计时触发
         //
-        //  ──────────────────────────────────────────────────────────
-        //  爆发高 BPM 解决方案
-        //  ──────────────────────────────────────────────────────────
-        //
-        //  1. for 循环不自动递增 i，只有成功触发后才 i++
-        //  2. audioNow 在每次循环体内用 QPC 重算（~20ns，无系统调用）
-        //  3. 对同一个 floor 反复重入实现精确等待：
-        //       waitSec > 5ms  → Sleep(1) + break（回外层刷新 anchor）
-        //       waitSec > 2ms  → SpinWait + continue（比 Yield 更可控）[OPT-3]
-        //       waitSec ≤ 2ms  → 纯自旋 continue（最高精度，不离开 for）
-        //  4. 触发后尝试接收新 anchor（爆发段跨帧时刷新 DSP 基准）
-        //  5. OPT-4: 外层缓存 lastSeenAnchor，锚点未变时跳过局部变量重拷贝
-        //  6. OPT-5: 自旋段每 64 次才做一次 resetVersion volatile read，
-        //            减少不必要的内存屏障
+        //  预处理后热路径彻底消除了：
+        //    · floor 对象读取
+        //    · auto / midSpin 判断
+        //    · holdLength 判断
+        //    · localKeyIndex 轮换
+        //  工作线程只做：等待到时间 → 按键 / 松键
         // ═══════════════════════════════════════════════════════════════
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WorkerLoop()
@@ -387,34 +394,30 @@ namespace BaseMacro.Macro
                 if (!_workerRunning) return;
 
                 int localLastFloor = Volatile.Read(ref _workerLastTriggeredFloor);
-                int localKeyIndex = Volatile.Read(ref _workerKeyIndex);
                 int localResetVer = Volatile.Read(ref _resetVersion);
 
                 while (_workerRunning)
                 {
                     var anchor = Volatile.Read(ref _currentAnchor);
 
-                    if (!anchor.valid || anchor.floors == null || anchor.triggerTimes == null)
+                    if (!anchor.valid || anchor.hitEvents == null || anchor.hitEventCount == 0)
                     {
                         Thread.Sleep(1);
                         continue;
                     }
 
+                    // 检测重置
                     int curResetVer = Volatile.Read(ref _resetVersion);
                     if (curResetVer != localResetVer)
                     {
                         localResetVer = curResetVer;
                         localLastFloor = Volatile.Read(ref _workerLastTriggeredFloor);
-                        localKeyIndex = Volatile.Read(ref _workerKeyIndex);
                         continue;
                     }
 
-                    var times = anchor.triggerTimes;
-                    var floors = anchor.floors;
-                    int triggerCount = Math.Min(times.Length, floors.Length);
-
-                    byte[] keys = anchor.keyCodesSnapshot;
-                    int keyLen = keys.Length;
+                    // 从 anchor 拷贝热路径所需局部变量（消除重复 volatile 读）
+                    var events = anchor.hitEvents;
+                    int evCount = anchor.hitEventCount;
                     bool simulateKey = anchor.simulateKeyPress;
                     double timeOffset = anchor.timeOffset;
                     double pitch = anchor.pitch;
@@ -426,7 +429,8 @@ namespace BaseMacro.Macro
                     int hitCount = 0;
                     bool triggered = false;
 
-                    if (localLastFloor >= triggerCount - 2)
+                    // 全部事件已触发，空转等待重置
+                    if (localLastFloor >= evCount - 2)
                     {
                         int ver = Volatile.Read(ref _resetVersion);
                         for (int s = 0; s < 50 && _workerRunning
@@ -435,84 +439,75 @@ namespace BaseMacro.Macro
                         goto WriteBack;
                     }
 
-                    for (int i = localLastFloor + 1; i < triggerCount; /* i++ 在触发后 */)
+                    // ── 核心触发循环 ──────────────────────────────────────────
+                    // i 只在成功触发后递增，对同一事件反复重入实现精确等待。
+                    for (int i = localLastFloor + 1; i < evCount; /* i++ 在触发后 */)
                     {
                         if (Volatile.Read(ref _resetVersion) != localResetVer)
                             goto WriteBack;
 
-                        var floor = floors[i];
-                        if (floor == null) { i++; continue; }
-
-                        if (floor.nextfloor?.auto == true || floor.midSpin)
-                        {
-                            localLastFloor = i++;
-                            triggered = true;
-                            continue;
-                        }
-
-                        // OPT-1: 乘 perfFreqInv 代替除 perfFrequency
+                        // ── 计算当前音频时间（~20ns，无系统调用）──
                         long qpcNow = GetRawTicks();
-                        double dspElapsed = (double)(qpcNow - qpcSnapshot) * perfFreqInv;
-                        double audioNow = songPosRef + (dspSnapshot + dspElapsed - dspTimeRef) * pitch;
+                        double elapsed = (double)(qpcNow - qpcSnapshot) * perfFreqInv;
+                        double audioNow = songPosRef + (dspSnapshot + elapsed - dspTimeRef) * pitch;
 
-                        double triggerAt = times[i] + timeOffset;
+                        double triggerAt = events[i].TriggerTime + timeOffset;
 
                         if (triggerAt > audioNow)
                         {
+                            // 还没到时间：按等待长度选择等待策略
                             if (pitch <= 0.0) { Thread.Sleep(1); break; }
                             double waitSec = (triggerAt - audioNow) / pitch;
 
-                            if (waitSec > 0.005) { Thread.Sleep(1); break; }
-                            else if (waitSec > 0.002) Thread.Yield();
+                            if (waitSec > 0.005) { Thread.Sleep(1); break; } // 回外层刷新 anchor
+                            else if (waitSec > 0.002) Thread.Yield();              // 让出 CPU 片
+                            // else: 纯自旋，直到到时间
                             continue;
                         }
 
-                        bool releaseOnly = false;
-                        if (simulateKey && floor.holdLength > -1 && i + 1 < triggerCount)
-                        {
-                            var nf = floors[i + 1];
-                            if (nf != null && nf.holdLength == -1) releaseOnly = true;
-                        }
+                        // ── 到时间，执行按键 ─────────────────────────────────
+                        ref readonly var ev = ref events[i];
 
                         if (!simulateKey)
                         {
                             hitCount++;
-                            Log($"[Macro-Worker] 请求 Hit() FloorIndex={i}");
+                            Log($"[Macro-Worker] 请求 Hit() EventIndex={i}");
                         }
-                        else if (releaseOnly)
+                        else if (ev.ReleaseOnly)
                         {
                             WorkerReleaseKey();
+                            Log($"[Macro-Worker] 松键 EventIndex={i} audioNow={audioNow:F6}");
                         }
                         else
                         {
-                            byte key = keys[localKeyIndex];
-                            WorkerPressKey(key);
-                            if (++localKeyIndex >= keyLen) localKeyIndex = 0;
-                            Log($"[Macro-Worker] 按下 0x{key:X2} FloorIndex={i} audioNow={audioNow:F6}");
+                            WorkerPressKey(ev.KeyCode);
+                            Log($"[Macro-Worker] 按下 0x{ev.KeyCode:X2} EventIndex={i} audioNow={audioNow:F6}");
                         }
 
                         localLastFloor = i++;
                         triggered = true;
 
-                        var freshAnchor = Volatile.Read(ref _currentAnchor);
-                        if (!ReferenceEquals(freshAnchor, anchor) && freshAnchor.valid
+                        // 触发后尝试接收新 anchor（爆发段跨帧时刷新 DSP 基准）
+                        var fresh = Volatile.Read(ref _currentAnchor);
+                        if (!ReferenceEquals(fresh, anchor) && fresh.valid
                             && Volatile.Read(ref _resetVersion) == localResetVer)
                         {
-                            anchor = freshAnchor;
+                            anchor = fresh;
+                            events = anchor.hitEvents!;
+                            evCount = anchor.hitEventCount;
                             dspSnapshot = anchor.dspSnapshot;
                             qpcSnapshot = anchor.qpcSnapshot;
                         }
                     }
 
-                    if (_isKeyDown && localLastFloor >= triggerCount - 1)
+                    // 所有事件触发完毕，确保松开最后一个持有键
+                    if (_isKeyDown && localLastFloor >= evCount - 1)
                         WorkerReleaseKey();
 
                 WriteBack:
                     if (triggered && Volatile.Read(ref _resetVersion) == localResetVer)
-                    {
                         Volatile.Write(ref _workerLastTriggeredFloor, localLastFloor);
-                        Volatile.Write(ref _workerKeyIndex, localKeyIndex);
-                    }
+
                     if (hitCount > 0)
                         Interlocked.Add(ref _workerNeedsHit, hitCount);
                 }
@@ -524,6 +519,7 @@ namespace BaseMacro.Macro
                 Log("[Macro-Worker] 工作线程退出");
             }
         }
+
         // ═══════════════════════════════════════════════════════════════
         //  按键操作
         // ═══════════════════════════════════════════════════════════════
@@ -583,19 +579,17 @@ namespace BaseMacro.Macro
             if (levelMaker?.listFloors == null || levelMaker.listFloors.Count == 0) return;
 
             cachedFloors = [.. levelMaker.listFloors];
-
             floorCount = cachedFloors.Length;
-            triggerTimes = new double[floorCount];
-
-            for (int i = 0; i < floorCount - 1; i++)
-                triggerTimes[i] = cachedFloors[i + 1]?.entryTime ?? double.MaxValue;
-            triggerTimes[floorCount - 1] = double.MaxValue;
-
             conductor = scrConductor.instance;
+
             ParseKeyCodes();
+
+            // ── 预处理：一次性构建 HitEvent 表 ────────────────────────
+            BuildHitEvents();
+
             initialized = true;
 
-            // 静态数据版本递增，通知 anchor 更新 triggerTimes/floors
+            // 静态数据版本递增，通知 anchor 更新 hitEvents
             _staticAnchorVersion++;
 
             _dspTimeRef = DSPTimeSimulater.GetDSPTime();
@@ -610,21 +604,73 @@ namespace BaseMacro.Macro
 
             int syncFloor = SyncFloor(_songPosRef);
             Volatile.Write(ref _workerLastTriggeredFloor, syncFloor);
-            Volatile.Write(ref _workerKeyIndex, 0);
 
             Log("[Macro-Main] 初始化完成");
+        }
+
+        /// <summary>
+        /// 预处理阶段：遍历所有 floor，计算触发时间、分配按键、判断 hold/release，
+        /// 结果写入 _hitEvents[]。工作线程热路径不再访问任何 floor 对象。
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void BuildHitEvents()
+        {
+            var floors = cachedFloors!;
+            int n = floors.Length;
+            bool simulate = Main.Settings.SimulateKeyPress;
+
+            byte[] keys = [.. keyCodes];
+            int keyLen = keys.Length;
+            int keyIdx = 0;
+
+            var events = new List<HitEvent>(n);
+
+            for (int i = 0; i < n - 1; i++)
+            {
+                var floor = floors[i];
+                if (floor == null) continue;
+
+                // auto 拍 / midSpin：游戏自动处理，不需要按键，直接跳过
+                if (floor.nextfloor?.auto == true || floor.midSpin)
+                    continue;
+
+                // 触发时间 = 下一拍的 entryTime
+                double t = floors[i + 1]?.entryTime ?? double.MaxValue;
+
+                if (simulate && floor.holdLength > -1 && i + 1 < n)
+                {
+                    var nf = floors[i + 1];
+                    if (nf != null && nf.holdLength == -1)
+                    {
+                        // hold 结束拍：只松键，不分配新 key
+                        events.Add(new HitEvent(t, 0, releaseOnly: true));
+                        continue;
+                    }
+                }
+
+                // 普通拍：轮换分配按键
+                byte key = keys[keyIdx];
+                if (++keyIdx >= keyLen) keyIdx = 0;
+                events.Add(new HitEvent(t, key, releaseOnly: false));
+            }
+
+            _hitEvents = [.. events];
+            _hitEventCount = _hitEvents.Length;
+
+            Log($"[Macro-Main] BuildHitEvents 完成，共 {_hitEventCount} 个事件");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int SyncFloor(double currentTime)
         {
-            if (triggerTimes == null || triggerTimes.Length == 0) return -1;
-            int left = 0, right = triggerTimes.Length - 1;
+            if (_hitEvents == null || _hitEvents.Length == 0) return -1;
+            int left = 0, right = _hitEvents.Length - 1;
             while (left <= right)
             {
                 int mid = (left + right) >> 1;
-                if (triggerTimes[mid] < currentTime) left = mid + 1;
-                else if (triggerTimes[mid] > currentTime) right = mid - 1;
+                double t = _hitEvents[mid].TriggerTime;
+                if (t < currentTime) left = mid + 1;
+                else if (t > currentTime) right = mid - 1;
                 else return mid;
             }
             return left - 1;
@@ -681,17 +727,16 @@ namespace BaseMacro.Macro
         private static void ResetState(scrController? controller)
         {
             initialized = false;
-            triggerTimes = null;
+            _hitEvents = null;
+            _hitEventCount = 0;
             cachedFloors = null;
             levelMaker = null;
             conductor = null;
 
             Volatile.Write(ref _workerLastTriggeredFloor, -1);
-            Volatile.Write(ref _workerKeyIndex, 0);
             Interlocked.Exchange(ref _workerNeedsHit, 0);
 
-            // valid 改为 Volatile.Write(ref int)，保证写入顺序在 resetVersion 递增之前，
-            // 防止 CPU 乱序导致工作线程读到 valid=true 但 resetVersion 已经改变
+            // valid 改为 Volatile.Write(ref int)，保证写入顺序在 resetVersion 递增之前
             Volatile.Write(ref _anchorA.validFlag, 0);
             Volatile.Write(ref _anchorB.validFlag, 0);
 
@@ -710,7 +755,7 @@ namespace BaseMacro.Macro
             if (_workerRunning && _workerThread?.IsAlive == true) return;
 
             _workerRunning = true;
-            _workerStarted = false;   // 重置启动 flag，确保新线程能收到信号
+            _workerStarted = false;
             _workerThread = new Thread(WorkerLoop)
             {
                 IsBackground = true,
@@ -732,7 +777,6 @@ namespace BaseMacro.Macro
             _workerRunning = false;
 
             // FIX-BUG: 用 try-catch 防止 SemaphoreFullException（maxCount=1）
-            //          旧代码若工作线程尚未消费信号就触发第二次 Release 会抛异常
             if (!_workerStarted)
             {
                 _workerStarted = true;
@@ -790,7 +834,6 @@ namespace BaseMacro.Macro
             return GetTicks();
         }
 
-        // QPC 原始值，用于工作线程帧内插值（~20ns，无系统调用开销）
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static long GetTicks()
         {

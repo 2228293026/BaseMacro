@@ -17,6 +17,9 @@ using static UnityModManagerNet.UnityModManager;
 
 namespace BaseMacro
 {
+#if DEBUG
+    [EnableReloading]
+#endif
     public static class Main
     {
         public static UnityModManager.ModEntry? Mod { get; private set; }
@@ -50,8 +53,19 @@ namespace BaseMacro
             modEntry.OnToggle = OnToggle;
             modEntry.OnGUI = Settings.OnGUI;
             modEntry.OnSaveGUI = Settings.OnSaveGUI;
+            modEntry.OnUnload = Unload;
 
             Harmony = new Harmony(modEntry.Info.Id);
+            return true;
+        }
+
+        public static bool Unload(UnityModManager.ModEntry modEntry)
+        {
+            var harmony = new Harmony(modEntry.Info.Id);
+            harmony.UnpatchAll(modEntry.Info.Id);
+
+            // If you have created any dependent objects, they also need to be deleted.
+
             return true;
         }
 
@@ -68,12 +82,17 @@ namespace BaseMacro
         {
             if (value)
             {
+#if DEBUG
+                // None
+
+#else
                 if (modEntry.Info.Version != "1.1.1" || modEntry.Info.Id != "BaseMacro" || modEntry.Info.DisplayName != "Base Macro" || modEntry.Info.Author != "HitMargin" || modEntry.Info.AssemblyName != "BaseMacro.dll" || modEntry.Info.EntryMethod != "BaseMacro.Main.Load")
                 {
                     Mod?.Logger.Error("Modifying the Info.json file is NOT allowed!");
                     Application.Quit();
                 }
 
+#endif
                 Mod?.Info.IsCheat = true;
                 if (Mod!.Info.IsCheat)
                 {
