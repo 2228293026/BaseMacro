@@ -430,7 +430,7 @@ namespace BaseMacro.Macro
                     bool triggered = false;
 
                     // 全部事件已触发，空转等待重置
-                    if (localLastFloor >= evCount - 2)
+                    if (localLastFloor >= evCount - 1)
                     {
                         int ver = Volatile.Read(ref _resetVersion);
                         for (int s = 0; s < 50 && _workerRunning
@@ -631,7 +631,7 @@ namespace BaseMacro.Macro
                 if (floor == null) continue;
 
                 // auto 拍 / midSpin：游戏自动处理，不需要按键，直接跳过
-                if (floor.nextfloor?.auto == true || floor.midSpin)
+                if ((floor.nextfloor != null && floor.nextfloor.auto) || floor.midSpin)
                     continue;
 
                 // 触发时间 = 下一拍的 entryTime
