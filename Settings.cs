@@ -331,9 +331,10 @@ namespace BaseMacro
                 GUILayout.Space(12);
                 DrawOtherSettingsCard();
             }
+            GUILayout.Space(12);
+            DrawUpdateLogCard();
 
             GUILayout.Space(12);
-
             DrawAuthorCard();
 
             // 如果是测试版，添加测试版水印卡片
@@ -607,7 +608,8 @@ namespace BaseMacro
                     ref _filteredKeysState.input,
                     ref _filteredKeysState.focused,
                     UIUtils.TextFieldStyle,
-                    GUILayout.ExpandWidth(true));
+                    GUILayout.ExpandWidth(true),
+                    GUILayout.MaxWidth(240));
                 if (newFilteredKeys != FilteredKeys)
                     FilteredKeys = newFilteredKeys;
                 GUILayout.EndHorizontal();
@@ -623,7 +625,8 @@ namespace BaseMacro
                         ref _filteredAsyncKeysState.input,
                         ref _filteredAsyncKeysState.focused,
                         UIUtils.TextFieldStyle,
-                        GUILayout.ExpandWidth(true));
+                    GUILayout.ExpandWidth(true),
+                    GUILayout.MaxWidth(240));
                     if (newFilteredAsyncKeys != FilteredAsyncKeys)
                         FilteredAsyncKeys = newFilteredAsyncKeys;
                 }
@@ -720,26 +723,6 @@ namespace BaseMacro
             GUILayout.BeginVertical(UIUtils.CardStyle);
             GUILayout.Label(UseChinese ? "其他选项" : "Other Settings", UIUtils.HeaderStyle);
             GUILayout.Space(2);
-
-            // 先检查 SkyHookMode 是否开启
-            if (!SkyHookMode && EnableDeathKey)
-            {
-                // 如果 SkyHook 未开启，显示提示信息
-                GUIStyle warningStyle = new(UIUtils.LabelStyle);
-                warningStyle.normal.textColor = new Color(1f, 0.7f, 0f, 0.9f);
-                warningStyle.fontSize = 11;
-                warningStyle.wordWrap = true;
-
-                string warningText = UseChinese
-                    ? "⚠️ 需要开启 SkyHook 模式才能使用死亡后自动按键功能"
-                    : "⚠️ SkyHook Mode is required for auto-press key on death";
-
-                GUILayout.Label(warningText, warningStyle);
-                EnableDeathKey = false; // 强制关闭死亡按键功能
-
-                GUILayout.EndVertical();
-                return;
-            }
 
             // SkyHook 已开启，显示正常功能
             string deathKeySwitchText = UseChinese
@@ -916,6 +899,35 @@ namespace BaseMacro
             GUILayout.Space(4);
             GUILayout.Label(feedbackText, feedbackStyle);
             GUILayout.EndHorizontal();
+        }
+
+        private Vector2 _updateLogScrollPos;
+
+        private void DrawUpdateLogCard()
+        {
+            GUILayout.BeginVertical(UIUtils.CardStyle);
+            GUILayout.Label(UseChinese ? "更新日志" : "What's New", UIUtils.HeaderStyle);
+            GUILayout.Space(4);
+
+            // 固定高度滚动视图，避免日志过长撑高卡片
+            float scrollViewHeight = 150;
+            _updateLogScrollPos = GUILayout.BeginScrollView(_updateLogScrollPos, GUILayout.Height(scrollViewHeight));
+
+            // 日志样式：支持换行和富文本
+            GUIStyle logStyle = new(UIUtils.LabelStyle)
+            {
+                wordWrap = true,
+                richText = true
+            };
+            string cleanTitle = Main.Mod.Info.Version.Replace('\n', ' ').Replace('\r', ' ');
+            // 更新内容
+            string logText = UseChinese ?
+                $"<b>版本 {cleanTitle}</b>\n• 优化 UI 布局\n• 修复若干 bug" :
+                $"<b>Version {cleanTitle}</b>\n• Improved UI layout\n• Fixed several bugs";
+
+            GUILayout.Label(logText, logStyle);
+            GUILayout.EndScrollView();
+            GUILayout.EndVertical();
         }
 
         public void OnSaveGUI(UnityModManager.ModEntry modEntry) => Save(modEntry);
